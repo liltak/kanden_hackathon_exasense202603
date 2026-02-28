@@ -12,6 +12,7 @@ simulation:
   include_diffuse: true          # Include DHI (diffuse horizontal irradiance)
   diffuse_model: "perez"         # Diffuse model: isotropic, perez (anisotropic)
   albedo: 0.15                   # Ground reflectance (factory/urban: 0.10-0.20)
+  # epw_file: "data/weather/JPN_Osaka.epw"  # Uncomment to use real weather data
 
 panel:
   efficiency: 0.20               # 20% panel efficiency
