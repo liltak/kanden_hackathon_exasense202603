@@ -19,6 +19,8 @@ panel:
   degradation_rate: 0.005        # 0.5% annual degradation
   cost_per_kw: 250000            # JPY per kW installed
   lifespan_years: 25
+  temp_coeff_pmax: -0.004        # Temperature coefficient of Pmax (%/°C, crystalline Si)
+  mount_type: "open_rack_glass_polymer"  # SAPM mounting type
 
 electricity:
   price_per_kwh: 30              # JPY per kWh (industrial rate)
