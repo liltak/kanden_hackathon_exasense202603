@@ -126,7 +126,7 @@ world_points_conf: (1, 10, 336, 518)
 - [ ] COLMAP インストール確認 (apt-getでインストール不可、ソースビルド必要)
 
 ### Step 2: VGGT推論テスト
-- [x] モデルダウンロード (facebook/VGGT-1B)
+- [x] モデルダウンロード (facebook/VGGT-1B-Commercial)
 - [x] 5枚の合成画像で推論実行
 - [x] 出力形式確認 (点群, カメラポーズ, 深度マップ, 信頼度マップ)
 - [x] VRAM使用量計測: モデル5.0GB, Peak 9.2GB
@@ -154,7 +154,7 @@ world_points_conf: (1, 10, 336, 518)
 from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
 
-model = VGGT.from_pretrained("facebook/VGGT-1B").to("cuda")
+model = VGGT.from_pretrained("facebook/VGGT-1B-Commercial").to("cuda")
 images = load_and_preprocess_images(image_paths).to("cuda")
 
 # T4 (compute < 8.0) → float16, A10G/H100 (compute >= 8.0) → bfloat16

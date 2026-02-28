@@ -25,7 +25,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 logger = logging.getLogger(__name__)
 console = Console()
 
-VGGT_MODEL_ID = "facebook/VGGT-1B"
+VGGT_MODEL_ID = "facebook/VGGT-1B-Commercial"
 
 
 @dataclass

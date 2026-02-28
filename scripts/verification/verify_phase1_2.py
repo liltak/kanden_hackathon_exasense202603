@@ -143,7 +143,7 @@ def check_vggt_load() -> CheckResult:
         vram_before = torch.cuda.memory_allocated() / 1e9
 
         model = AutoModel.from_pretrained(
-            "facebook/VGGT-1B", trust_remote_code=True,
+            "facebook/VGGT-1B-Commercial", trust_remote_code=True,
         )
         model = model.to("cuda")
 
@@ -191,7 +191,7 @@ def check_vggt_inference(image_dir: Path) -> CheckResult:
         console.print(f"  Running VGGT on {len(images)} images...")
 
         torch.cuda.reset_peak_memory_stats()
-        model = AutoModel.from_pretrained("facebook/VGGT-1B", trust_remote_code=True)
+        model = AutoModel.from_pretrained("facebook/VGGT-1B-Commercial", trust_remote_code=True)
         model = model.to("cuda")
 
         # Load and preprocess images

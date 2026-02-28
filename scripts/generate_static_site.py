@@ -291,7 +291,7 @@ th:nth-child(n+3) {{ text-align: right; }}
 <div>
 <h3 style="margin-bottom:8px;">Phase 1-2: 3D再構築 + メッシュ処理</h3>
 <ul style="padding-left:20px; line-height:1.8;">
-<li><strong>VGGT-1B</strong> (Meta) — 画像→3D点群変換</li>
+<li><strong>VGGT-1B-Commercial</strong> (Meta) — 画像→3D点群変換</li>
 <li><strong>Open3D</strong> — Poisson再構成 + メッシュ品質改善</li>
 <li>改善パイプライン: 1.7M点 → 20K面 (28x圧縮)</li>
 </ul>
