@@ -10,6 +10,8 @@ simulation:
   time_resolution_minutes: 60    # 1-hour intervals = 8,760 points/year
   dni_model: "ineichen"          # Clear sky model: ineichen, haurwitz, simplified_solis
   include_diffuse: true          # Include DHI (diffuse horizontal irradiance)
+  diffuse_model: "perez"         # Diffuse model: isotropic, perez (anisotropic)
+  albedo: 0.15                   # Ground reflectance (factory/urban: 0.10-0.20)
 
 panel:
   efficiency: 0.20               # 20% panel efficiency

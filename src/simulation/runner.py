@@ -153,6 +153,7 @@ def run_simulation(
         # Step 4: Irradiance calculation
         progress.update(task, description="Computing annual irradiance...")
         time_step_hours = sim["time_resolution_minutes"] / 60.0
+        diffuse_model = sim.get("diffuse_model", "isotropic")
         irradiance_results = compute_face_irradiance(
             face_normals=mesh.face_normals,
             face_areas=mesh.area_faces,
@@ -161,6 +162,11 @@ def run_simulation(
             dni=cs["dni"].values,
             dhi=cs["dhi"].values if sim.get("include_diffuse", True) else np.zeros(len(cs)),
             time_step_hours=time_step_hours,
+            solar_zenith=solar.zenith,
+            solar_azimuth=solar.azimuth,
+            ghi=cs["ghi"].values if "ghi" in cs.columns else None,
+            diffuse_model=diffuse_model,
+            albedo=sim.get("albedo", 0.15),
         )
         progress.advance(task)
 
