@@ -88,7 +88,7 @@ t0 = time.time()
 from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
 
-model = VGGT.from_pretrained("facebook/VGGT-1B").to("cuda")
+model = VGGT.from_pretrained("facebook/VGGT-1B-Commercial").to("cuda")
 compute_cap = torch.cuda.get_device_capability(0)
 dtype = torch.bfloat16 if compute_cap[0] >= 8 else torch.float16
 model_load_time = time.time() - t0

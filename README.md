@@ -24,13 +24,13 @@
 Phase 1-2 (GPU)          Phase 3 (CPU)              Phase 4 (GPU)      Phase 5
 ドローン画像             日照シミュレーション         AI分析             WebUI
   ↓                        ↓                          ↓                 ↓
-VGGT-1B → メッシュ処理 → pvlib + trimesh → ROI算出 → Qwen3.5-VL → Gradio Dashboard
+VGGT-1B-Commercial → メッシュ処理 → pvlib + trimesh → ROI算出 → Qwen3.5-VL → Gradio Dashboard
   1.7M点    20K面           8,760時点/年                設置提案        5タブUI
 ```
 
 ### Phase 1-2: 3D再構築 + メッシュ処理
 
-- **VGGT-1B** (Meta) で画像から3D点群を生成
+- **VGGT-1B-Commercial** (Meta) で画像から3D点群を生成
 - **Open3D** による品質改善パイプライン:
 
 ```
@@ -102,7 +102,7 @@ exasense/
 
 | カテゴリ | 技術 |
 |----------|------|
-| 3D再構築 | VGGT-1B, Open3D, COLMAP |
+| 3D再構築 | VGGT-1B-Commercial, Open3D, COLMAP |
 | シミュレーション | pvlib, trimesh, NumPy, Plotly |
 | AI分析 | Qwen3.5-VL, Unsloth, Transformers |
 | UI | Gradio, FastAPI, Uvicorn |

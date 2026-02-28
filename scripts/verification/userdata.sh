@@ -79,7 +79,7 @@ try:
     t0 = time.time()
 
     from vggt.models.vggt import VGGT
-    model = VGGT.from_pretrained("facebook/VGGT-1B")
+    model = VGGT.from_pretrained("facebook/VGGT-1B-Commercial")
 
     # Use float16 for T4 (compute < 8.0), bfloat16 for A10G/H100 (compute >= 8.0)
     compute_cap = torch.cuda.get_device_capability(0)
