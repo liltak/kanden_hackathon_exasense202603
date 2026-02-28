@@ -2,14 +2,19 @@
 
 Integrates solar irradiance over the year for each face,
 accounting for face orientation, shadows, and both direct and diffuse radiation.
+Supports isotropic and Perez anisotropic diffuse models via pvlib.
 """
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pvlib
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -25,6 +30,25 @@ class FaceIrradiance:
     sun_hours: float  # hours per year with direct sunlight
 
 
+def _normal_to_tilt_azimuth(normals: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Convert face normal vectors to surface tilt and azimuth angles.
+
+    Args:
+        normals: (n_faces, 3) face normal vectors in ENU coordinates.
+
+    Returns:
+        tilt: (n_faces,) surface tilt in degrees (0=horizontal, 90=vertical).
+        azimuth: (n_faces,) surface azimuth in degrees (0=North, clockwise).
+    """
+    up = np.array([0, 0, 1])
+    cos_tilt = np.clip(np.dot(normals, up), -1, 1)
+    tilt = np.degrees(np.arccos(cos_tilt))
+
+    # Surface azimuth: direction the surface faces (opposite of outward normal projected to xy)
+    azimuth = np.degrees(np.arctan2(normals[:, 0], normals[:, 1])) % 360
+    return tilt, azimuth
+
+
 def compute_face_irradiance(
     face_normals: np.ndarray,
     face_areas: np.ndarray,
@@ -33,6 +57,11 @@ def compute_face_irradiance(
     dni: np.ndarray,
     dhi: np.ndarray,
     time_step_hours: float = 1.0,
+    solar_zenith: np.ndarray | None = None,
+    solar_azimuth: np.ndarray | None = None,
+    ghi: np.ndarray | None = None,
+    diffuse_model: str = "isotropic",
+    albedo: float = 0.15,
 ) -> list[FaceIrradiance]:
     """Compute annual irradiance for each mesh face.
 
@@ -44,39 +73,79 @@ def compute_face_irradiance(
         dni: (T,) Direct Normal Irradiance in W/m^2.
         dhi: (T,) Diffuse Horizontal Irradiance in W/m^2.
         time_step_hours: Time step duration in hours.
+        solar_zenith: (T,) solar zenith in degrees (required for Perez model).
+        solar_azimuth: (T,) solar azimuth in degrees (required for Perez model).
+        ghi: (T,) Global Horizontal Irradiance in W/m^2 (required for Perez model).
+        diffuse_model: "isotropic" or "perez".
+        albedo: Ground reflectance for ground-reflected irradiance (default 0.15).
 
     Returns:
         List of FaceIrradiance for each face.
     """
     n_faces = face_normals.shape[0]
-    n_times = sun_directions.shape[0]
 
     # Compute cos(incidence angle) = dot(face_normal, sun_direction)
-    # Shape: (T, n_faces)
     cos_incidence = np.dot(sun_directions, face_normals.T)
-    cos_incidence = np.clip(cos_incidence, 0, 1)  # only positive contributions
+    cos_incidence = np.clip(cos_incidence, 0, 1)
 
-    # Direct irradiance on each face at each time: DNI * cos(theta) * illuminated
-    # dni shape: (T,) -> (T, 1)
+    # Direct irradiance: DNI * cos(theta) * illuminated
     direct_irradiance = dni[:, np.newaxis] * cos_incidence * shadow_matrix
 
-    # Diffuse irradiance: simplified isotropic model
-    # Each face receives DHI weighted by its sky view factor
-    # For a tilted surface, sky view factor ≈ (1 + cos(tilt)) / 2
-    # where tilt = angle between face normal and vertical (up)
-    up = np.array([0, 0, 1])
-    cos_tilt = np.dot(face_normals, up)
-    cos_tilt = np.clip(cos_tilt, 0, 1)
-    sky_view_factor = (1 + cos_tilt) / 2  # (n_faces,)
+    # Diffuse irradiance
+    if diffuse_model == "perez" and solar_zenith is not None and solar_azimuth is not None:
+        logger.info("Using Perez anisotropic diffuse model (albedo=%.2f)", albedo)
+        surface_tilt, surface_azimuth = _normal_to_tilt_azimuth(face_normals)
 
-    diffuse_irradiance = dhi[:, np.newaxis] * sky_view_factor[np.newaxis, :]
+        if ghi is None:
+            ghi = dni * np.cos(np.radians(solar_zenith)).clip(0) + dhi
 
-    # Integrate over time (convert W/m^2 * hours → Wh/m^2, then to kWh/m^2)
+        # Perez model requires extraterrestrial DNI
+        day_of_year = np.arange(1, len(dni) + 1) * (365.0 / len(dni))
+        dni_extra = pvlib.irradiance.get_extra_radiation(day_of_year)
+
+        diffuse_irradiance = np.zeros((len(dni), n_faces))
+        for i in range(n_faces):
+            poa = pvlib.irradiance.get_total_irradiance(
+                surface_tilt=surface_tilt[i],
+                surface_azimuth=surface_azimuth[i],
+                solar_zenith=solar_zenith,
+                solar_azimuth=solar_azimuth,
+                dni=dni,
+                ghi=ghi,
+                dhi=dhi,
+                dni_extra=dni_extra,
+                model="perez",
+                albedo=albedo,
+            )
+            # Extract diffuse + ground-reflected (exclude direct, we handle it separately)
+            sky_diff = poa["poa_sky_diffuse"]
+            gnd_diff = poa["poa_ground_diffuse"]
+            # Handle both Series and ndarray returns from pvlib
+            if hasattr(sky_diff, "fillna"):
+                sky_diff = sky_diff.fillna(0).values
+                gnd_diff = gnd_diff.fillna(0).values
+            else:
+                sky_diff = np.nan_to_num(sky_diff, nan=0.0)
+                gnd_diff = np.nan_to_num(gnd_diff, nan=0.0)
+            diffuse_irradiance[:, i] = sky_diff + gnd_diff
+    else:
+        if diffuse_model == "perez":
+            logger.warning(
+                "Perez model requested but solar_zenith/solar_azimuth not provided. "
+                "Falling back to isotropic model."
+            )
+        # Isotropic model: DHI * (1 + cos(tilt)) / 2
+        up = np.array([0, 0, 1])
+        cos_tilt = np.clip(np.dot(face_normals, up), 0, 1)
+        sky_view_factor = (1 + cos_tilt) / 2
+        diffuse_irradiance = dhi[:, np.newaxis] * sky_view_factor[np.newaxis, :]
+
+    # Integrate over time (W/m^2 * hours → kWh/m^2)
     annual_direct = np.sum(direct_irradiance * time_step_hours, axis=0) / 1000.0
     annual_diffuse = np.sum(diffuse_irradiance * time_step_hours, axis=0) / 1000.0
     annual_total = annual_direct + annual_diffuse
 
-    # Sun hours: count time steps where face is illuminated
+    # Sun hours
     sun_hours = np.sum(shadow_matrix, axis=0) * time_step_hours
 
     results = []
