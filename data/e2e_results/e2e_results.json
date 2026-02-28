@@ -1,0 +1,56 @@
+{
+  "dataset": "mipnerf360_garden",
+  "timings": {
+    "vggt_model_load_s": 239.8,
+    "vggt_inference_s": 32.0,
+    "vggt_peak_vram_gb": 10.45,
+    "mesh_processing_s": 77.0,
+    "solar_simulation_s": 1.4,
+    "total_s": 360.6
+  },
+  "results": {
+    "vggt": {
+      "n_images": 10,
+      "image_shape": [
+        10,
+        3,
+        336,
+        518
+      ],
+      "inference_time_s": 32.0,
+      "peak_vram_gb": 10.45
+    },
+    "point_cloud": {
+      "n_points": 1740480,
+      "conf_threshold": 0.3,
+      "bbox_min": [
+        -2.396084785461426,
+        -1.358528971672058,
+        -2.1635215282440186
+      ],
+      "bbox_max": [
+        2.467259645462036,
+        0.6503743529319763,
+        2.753446102142334
+      ]
+    },
+    "mesh": {
+      "n_vertices": 285264,
+      "n_faces": 566130,
+      "processing_time_s": 77.0
+    },
+    "solar": {
+      "latitude": 34.69,
+      "longitude": 135.5,
+      "annual_ghi_kwh_m2": 2118.7,
+      "upward_faces": 194579,
+      "upward_area_m2": 8.1,
+      "potential_kw": 1.6,
+      "potential_kwh_year": 2752.0,
+      "annual_savings_yen": 82545.0,
+      "installation_cost_yen": 405833.0,
+      "payback_years": 4.9,
+      "simulation_time_s": 1.4
+    }
+  }
+}

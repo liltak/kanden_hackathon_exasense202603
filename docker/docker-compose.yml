@@ -1,0 +1,22 @@
+services:
+  exasense:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "7860:7860"   # Gradio UI
+      - "8000:8000"   # FastAPI
+    volumes:
+      - ../data:/app/data
+      - ../configs:/app/configs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - HF_HOME=/app/data/.cache/huggingface
+    restart: unless-stopped

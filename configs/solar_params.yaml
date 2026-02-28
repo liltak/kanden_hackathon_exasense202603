@@ -1,0 +1,42 @@
+# Solar simulation parameters
+location:
+  latitude: 34.69   # Osaka (Kansai region)
+  longitude: 135.50
+  altitude: 10       # meters above sea level
+  timezone: "Asia/Tokyo"
+
+simulation:
+  year: 2025
+  time_resolution_minutes: 60    # 1-hour intervals = 8,760 points/year
+  dni_model: "ineichen"          # Clear sky model: ineichen, haurwitz, simplified_solis
+  include_diffuse: true          # Include DHI (diffuse horizontal irradiance)
+
+panel:
+  efficiency: 0.20               # 20% panel efficiency
+  degradation_rate: 0.005        # 0.5% annual degradation
+  cost_per_kw: 250000            # JPY per kW installed
+  lifespan_years: 25
+
+electricity:
+  price_per_kwh: 30              # JPY per kWh (industrial rate)
+  annual_price_increase: 0.02    # 2% annual increase
+
+mesh:
+  max_faces_for_simulation: 10000
+  min_face_area_m2: 0.5          # Skip tiny faces
+  preprocessing:
+    voxel_size: 0.02             # Voxel downsample size (meters)
+    stat_nb_neighbors: 20        # Statistical outlier: neighbor count
+    stat_std_ratio: 2.0          # Statistical outlier: std ratio
+    radius_nb_points: 16         # Radius outlier: min points in radius
+    radius: 0.05                 # Radius outlier: search radius (meters)
+  reconstruction:
+    poisson_depth: 7             # Poisson octree depth (7 = balanced)
+    density_quantile: 0.15       # Remove bottom 15% low-density vertices
+    linear_fit: true             # Linear fit for boundary extrapolation
+  postprocessing:
+    smooth_iterations: 10        # Taubin smoothing iterations
+    smooth_lambda: 0.5           # Smoothing positive factor
+    smooth_mu: -0.53             # Smoothing negative factor (volume-preserving)
+    target_faces: 20000          # Quadric decimation target
+    min_component_ratio: 0.01    # Remove components < 1% of total faces
