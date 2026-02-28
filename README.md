@@ -18,6 +18,18 @@
 
 *デモ工場コンプレックス (4棟, 大阪 34.69°N) での試算結果*
 
+## 実行環境
+
+| 項目 | バージョン |
+|------|-----------|
+| OS | Ubuntu 22.04 LTS / macOS 14+ |
+| Python | 3.10 以上 (3.12 推奨) |
+| CUDA | 12.1+ (GPU実行時) |
+| GPU | NVIDIA H100 80GB 推奨 (Phase 1-2, 4) / T4 16GB 以上 |
+| パッケージ管理 | [uv](https://docs.astral.sh/uv/) |
+
+> CPU のみの環境でも Phase 3 (シミュレーション) と Phase 5 (WebUI) は動作します。
+
 ## アーキテクチャ
 
 ```
@@ -74,6 +86,16 @@ uv run python -m src.ui.app
 uv run python scripts/generate_static_site.py
 ```
 
+### GPU環境 (H100) セットアップ
+
+```bash
+# H100サーバーでのフルセットアップ
+scripts/setup_h100.sh
+
+# E2Eパイプライン実行
+scripts/verification/e2e_garden_test.sh
+```
+
 ## プロジェクト構造
 
 ```
@@ -98,16 +120,33 @@ exasense/
     └── e2e_results/        # E2Eテスト結果 (Mip-NeRF 360 Garden)
 ```
 
-## 技術スタック
+## 使用モデル
 
-| カテゴリ | 技術 |
-|----------|------|
-| 3D再構築 | VGGT-1B-Commercial, Open3D, COLMAP |
-| シミュレーション | pvlib, trimesh, NumPy, Plotly |
-| AI分析 | Qwen3.5-VL, Unsloth, Transformers |
-| UI | Gradio, FastAPI, Uvicorn |
-| インフラ | AWS (g4dn/p5 EC2), Docker |
-| 言語 | Python 3.12 |
+| モデル | 用途 | ライセンス | 商用利用 | リンク |
+|--------|------|-----------|---------|--------|
+| VGGT-1B-Commercial (Meta) | 3D再構築 (Phase 1-2) | VGGT Acceptable Use Policy | OK | [HuggingFace](https://huggingface.co/facebook/VGGT-1B-Commercial) |
+| Qwen3.5-VL (Alibaba) | VLM分析 (Phase 4) | Apache 2.0 | OK | [HuggingFace](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct) |
+
+## 使用データセット
+
+| データセット | 用途 | ライセンス | リンク |
+|-------------|------|-----------|--------|
+| Mip-NeRF 360 (Google) | E2E検証用サンプル | CC BY 4.0 | [公式ページ](https://jonbarron.info/mipnerf360/) |
+
+> 本番運用ではドローン撮影による自社工場画像を使用します。
+
+## 主要ライブラリ
+
+| ライブラリ | バージョン | ライセンス |
+|-----------|-----------|-----------|
+| Open3D | >= 0.19.0 | MIT |
+| pvlib | >= 0.11.0 | BSD-3-Clause |
+| trimesh | >= 4.0.0 | MIT |
+| Gradio | >= 5.0.0 | Apache 2.0 |
+| FastAPI | >= 0.115.0 | MIT |
+| Unsloth | latest | Apache 2.0 |
+| NumPy | >= 1.26.0 | BSD-3-Clause |
+| Plotly | >= 5.18.0 | MIT |
 
 ## GPU検証結果
 
@@ -128,4 +167,7 @@ exasense/
 
 ## ライセンス
 
-Kanden Hackathon 2026
+本プロジェクトは [Apache License 2.0](LICENSE) の下で公開されています。
+
+使用する外部モデル・ライブラリについては、それぞれのライセンス条項に従ってください。
+詳細は上記の「使用モデル」「主要ライブラリ」セクションを参照してください。
