@@ -46,7 +46,8 @@ uv pip install \
     transformers>=4.45.0 \
     accelerate>=0.34.0 \
     bitsandbytes \
-    vllm
+    vllm \
+    embreex
 
 # Install Unsloth for fine-tuning
 echo ""
@@ -89,6 +90,10 @@ except: print('transformers: NOT INSTALLED')
 try:
     import open3d; print(f'open3d: {open3d.__version__}')
 except: print('open3d: NOT INSTALLED')
+
+try:
+    from trimesh.ray import ray_pyembree; print(f'Embree: available (accelerated ray backend)')
+except: print('Embree: NOT AVAILABLE (using trimesh native ray backend)')
 
 print()
 print('All checks complete!')

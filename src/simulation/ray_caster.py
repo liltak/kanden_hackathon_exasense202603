@@ -4,10 +4,22 @@ Determines which mesh faces are illuminated or shaded at each time step
 by casting rays from face centroids toward the sun.
 """
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
 import trimesh
+
+logger = logging.getLogger(__name__)
+
+try:
+    from trimesh.ray import ray_pyembree  # noqa: F401
+
+    HAS_EMBREE = True
+except ImportError:
+    HAS_EMBREE = False
+
+logger.info("Ray backend: %s", "Embree (pyembree)" if HAS_EMBREE else "trimesh native")
 
 
 @dataclass
