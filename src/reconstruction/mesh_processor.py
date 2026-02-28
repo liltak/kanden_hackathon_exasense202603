@@ -719,6 +719,94 @@ class MeshProcessor:
         )
         return self
 
+    # --- RANSAC Plane Detection ---
+
+    def detect_roof_planes(
+        self,
+        max_planes: int = 10,
+        distance_threshold: float = 0.1,
+        ransac_n: int = 3,
+        num_iterations: int = 1000,
+        min_plane_ratio: float = 0.02,
+    ) -> MeshProcessor:
+        """Detect major planar surfaces (roof faces) via iterative RANSAC.
+
+        Fits planes to mesh vertices, then projects nearby face vertices onto
+        the detected planes to flatten roof surfaces, improving normal accuracy
+        for solar simulation.
+
+        Args:
+            max_planes: Maximum number of planes to detect.
+            distance_threshold: RANSAC inlier distance threshold (meters).
+            ransac_n: Number of points sampled per RANSAC iteration.
+            num_iterations: RANSAC iterations per plane.
+            min_plane_ratio: Stop if remaining points < this fraction of total.
+
+        Returns:
+            self for chaining.
+        """
+        o3d = self._o3d
+        t0 = time.perf_counter()
+
+        if self._mesh is None:
+            raise ValueError("No mesh loaded. Call extract_mesh() first.")
+
+        vertices = np.asarray(self._mesh.vertices).copy()
+        total_points = len(vertices)
+        min_plane_points = int(total_points * min_plane_ratio)
+
+        # Create point cloud from mesh vertices for plane detection
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(vertices)
+
+        remaining_indices = np.arange(total_points)
+        planes_detected = []
+
+        for i in range(max_planes):
+            if len(remaining_indices) < min_plane_points:
+                break
+
+            # Create subset point cloud
+            subset_pcd = pcd.select_by_index(remaining_indices.tolist())
+
+            plane_model, inliers = subset_pcd.segment_plane(
+                distance_threshold=distance_threshold,
+                ransac_n=ransac_n,
+                num_iterations=num_iterations,
+            )
+
+            if len(inliers) < min_plane_points:
+                break
+
+            # Map inliers back to original vertex indices
+            original_inliers = remaining_indices[inliers]
+            planes_detected.append((plane_model, original_inliers))
+
+            # Project inlier vertices onto the plane
+            a, b, c, d = plane_model
+            normal = np.array([a, b, c])
+            for idx in original_inliers:
+                v = vertices[idx]
+                dist = np.dot(normal, v) + d
+                vertices[idx] = v - dist * normal
+
+            # Remove inliers from remaining
+            remaining_indices = np.setdiff1d(remaining_indices, original_inliers)
+
+            console.print(
+                f"    Plane {i + 1}: {len(original_inliers):,} vertices "
+                f"(normal=[{a:.2f}, {b:.2f}, {c:.2f}])"
+            )
+
+        if planes_detected:
+            self._mesh.vertices = o3d.utility.Vector3dVector(vertices)
+            self._mesh.compute_vertex_normals()
+            self._mesh.compute_triangle_normals()
+
+        self._timings["detect_roof_planes"] = time.perf_counter() - t0
+        console.print(f"  RANSAC plane detection: {len(planes_detected)} planes found")
+        return self
+
     # --- Face Segmentation ---
 
     def segment_faces(
@@ -983,6 +1071,10 @@ def process_reconstruction(
 
         task = progress.add_task("Decimating mesh...", total=None)
         processor.decimate_mesh(target_faces=target_faces)
+        progress.stop_task(task)
+
+        task = progress.add_task("Detecting roof planes (RANSAC)...", total=None)
+        processor.detect_roof_planes()
         progress.stop_task(task)
 
         task = progress.add_task("Fixing normals...", total=None)

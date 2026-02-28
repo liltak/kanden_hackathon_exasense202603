@@ -40,3 +40,9 @@ mesh:
     smooth_mu: -0.53             # Smoothing negative factor (volume-preserving)
     target_faces: 20000          # Quadric decimation target
     min_component_ratio: 0.01    # Remove components < 1% of total faces
+  plane_detection:
+    max_planes: 10               # Max number of RANSAC planes to detect
+    distance_threshold: 0.1      # Inlier distance threshold (meters)
+    ransac_n: 3                  # Points per RANSAC sample
+    num_iterations: 1000         # RANSAC iterations per plane
+    min_plane_ratio: 0.02        # Min fraction of vertices for a plane
