@@ -1,0 +1,22 @@
+{{- if and .Values.workerGpu.enabled .Values.workerGpu.autoscaling.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "exasense.fullname" . }}-worker-gpu
+  namespace: {{ include "exasense.namespace" . }}
+  labels:
+    {{- include "exasense.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "exasense.fullname" . }}-worker-gpu
+  minReplicaCount: {{ .Values.workerGpu.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.workerGpu.autoscaling.maxReplicas }}
+  pollingInterval: 15
+  cooldownPeriod: 600
+  triggers:
+    - type: redis
+      metadata:
+        address: {{ include "exasense.redisUrl" . }}
+        listName: {{ .Values.workerGpu.autoscaling.queueName }}
+        listLength: {{ .Values.workerGpu.autoscaling.queueThreshold | quote }}
+{{- end }}

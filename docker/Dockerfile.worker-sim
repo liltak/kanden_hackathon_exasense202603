@@ -1,0 +1,43 @@
+FROM python:3.12-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential curl \
+    libembree-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+COPY src/ ./src/
+COPY configs/ ./configs/
+
+RUN uv sync --no-dev --extra gpu
+
+# Runtime
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 libembree3-3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN addgroup --system --gid 1001 exasense \
+    && adduser --system --uid 1001 --ingroup exasense worker
+
+WORKDIR /app
+
+COPY --from=builder /app /app
+
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+
+USER worker
+
+CMD ["celery", "-A", "src.tasks.celery_app", "worker", \
+     "--loglevel=info", \
+     "--concurrency=4", \
+     "--queues=simulation", \
+     "--hostname=sim-worker@%h"]

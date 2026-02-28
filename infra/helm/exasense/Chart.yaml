@@ -1,0 +1,13 @@
+apiVersion: v2
+name: exasense
+description: ExaSense - Factory Energy Optimization Solution
+type: application
+version: 0.3.0
+appVersion: "0.3.0"
+keywords:
+  - solar
+  - simulation
+  - factory
+  - energy
+maintainers:
+  - name: ExaSense Team

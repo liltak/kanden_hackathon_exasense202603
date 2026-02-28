@@ -1,93 +1,99 @@
 """FastAPI backend for ExaSense.
 
-Provides REST API endpoints for each phase of the pipeline.
+Provides REST API + WebSocket endpoints for the factory energy optimization pipeline.
 """
 
+from __future__ import annotations
+
+import logging
+import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+import yaml
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+
+from .database import close_db, init_db
+from .routes import auth, chat, mesh, report, simulation
+from .schemas import ConfigResponse
+from .ws import manager as ws_manager
+
+logger = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+CONFIGS_DIR = PROJECT_ROOT / "configs"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("ExaSense API starting up")
+    await init_db()
+    await ws_manager.start_listener()
+    try:
+        from .storage import ensure_buckets
+
+        ensure_buckets()
+    except Exception:
+        logger.warning("MinIO not available, skipping bucket setup")
+    yield
+    await ws_manager.stop_listener()
+    await close_db()
+    logger.info("ExaSense API shutting down")
+
 
 app = FastAPI(
     title="ExaSense API",
     description="Factory Energy Optimization Solution API",
-    version="0.1.0",
+    version="0.3.0",
+    lifespan=lifespan,
 )
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
-RESULTS_DIR = DATA_DIR / "simulation_results"
+# CORS — allow configured origins or fall back to dev defaults
+_cors_origins = os.environ.get("CORS_ORIGINS", "").split(",")
+_cors_origins = [o.strip() for o in _cors_origins if o.strip()]
+if not _cors_origins:
+    _cors_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount routers
+app.include_router(auth.router)
+app.include_router(simulation.router)
+app.include_router(mesh.router)
+app.include_router(chat.router)
+app.include_router(report.router)
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "exasense"}
+    return {"status": "ok", "service": "exasense", "version": "0.3.0"}
 
 
-@app.post("/simulate")
-async def run_simulation(
-    latitude: float = 34.69,
-    longitude: float = 135.50,
-    year: int = 2025,
-):
-    """Run solar simulation with specified parameters."""
-    from ..simulation.runner import create_demo_mesh, load_config, run_simulation
-
-    config_path = PROJECT_ROOT / "configs" / "solar_params.yaml"
-    config = load_config(config_path)
-    config["location"]["latitude"] = latitude
-    config["location"]["longitude"] = longitude
-    config["simulation"]["year"] = year
-
-    mesh = create_demo_mesh()
-    output_dir = RESULTS_DIR / "latest"
-
-    irradiance_results, roi_report = run_simulation(mesh, config, output_dir)
-
-    return {
-        "status": "complete",
-        "n_faces": len(irradiance_results),
-        "n_suitable_faces": len(roi_report.proposals),
-        "total_capacity_kw": roi_report.total_capacity_kw,
-        "annual_generation_kwh": roi_report.total_annual_generation_kwh,
-        "annual_savings_jpy": roi_report.total_annual_savings_jpy,
-        "payback_years": roi_report.overall_payback_years,
-        "npv_25y_jpy": roi_report.overall_npv_25y_jpy,
-    }
+@app.get("/api/config", response_model=ConfigResponse)
+async def get_config():
+    """Return simulation configuration as JSON."""
+    config_path = CONFIGS_DIR / "solar_params.yaml"
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+    return ConfigResponse(**config)
 
 
-@app.get("/results/irradiance")
-async def get_irradiance():
-    """Get latest irradiance results as JSON."""
-    path = RESULTS_DIR / "latest" / "irradiance_results.json"
-    if not path.exists():
-        return JSONResponse(
-            status_code=404,
-            content={"error": "No simulation results found. Run /simulate first."},
-        )
-    return FileResponse(path, media_type="application/json")
-
-
-@app.get("/results/heatmap")
-async def get_heatmap():
-    """Get latest heatmap visualization as HTML."""
-    path = RESULTS_DIR / "latest" / "irradiance_heatmap.html"
-    if not path.exists():
-        return JSONResponse(
-            status_code=404,
-            content={"error": "No heatmap found. Run /simulate first."},
-        )
-    return FileResponse(path, media_type="text/html")
-
-
-@app.post("/chat")
-async def chat(message: str):
-    """Chat with VLM about simulation results (mock for now)."""
-    # TODO: Replace with actual VLM inference in Phase 4
-    return {
-        "response": (
-            "## 太陽光パネル設置提案\n\n"
-            "シミュレーション結果に基づき、南向き屋根面への設置を推奨します。\n\n"
-            "*（Phase 4 でVLMに置き換わります）*"
-        )
-    }
+@app.websocket("/api/ws/simulation/{task_id}")
+async def ws_simulation_progress(websocket: WebSocket, task_id: str):
+    """WebSocket endpoint for real-time simulation progress."""
+    await ws_manager.connect(task_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await ws_manager.disconnect(task_id, websocket)

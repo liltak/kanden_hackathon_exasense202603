@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -26,14 +26,12 @@ ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 
-# Copy project files
 COPY pyproject.toml uv.lock ./
 COPY src/ ./src/
 COPY configs/ ./configs/
-COPY scripts/ ./scripts/
 
-# Install Python dependencies
-RUN uv sync --extra dev
+# Install base dependencies
+RUN uv sync --no-dev
 
 # GPU-specific dependencies
 RUN uv pip install \
@@ -42,6 +40,9 @@ RUN uv pip install \
     open3d transformers accelerate bitsandbytes \
     vllm unsloth
 
-EXPOSE 8000
-
-CMD ["uv", "run", "uvicorn", "src.api.server:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["celery", "-A", "src.tasks.celery_app", "worker", \
+     "--loglevel=info", \
+     "--concurrency=1", \
+     "--queues=reconstruction,vlm", \
+     "--hostname=gpu-worker@%h", \
+     "--max-tasks-per-child=10"]

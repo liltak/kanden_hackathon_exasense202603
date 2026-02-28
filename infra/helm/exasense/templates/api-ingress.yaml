@@ -1,0 +1,30 @@
+{{- if .Values.api.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "exasense.fullname" . }}-api
+  namespace: {{ include "exasense.namespace" . }}
+  labels:
+    {{- include "exasense.labels" . | nindent 4 }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.middlewares: ""
+spec:
+  {{- if .Values.api.ingress.tls }}
+  tls:
+    - hosts:
+        - {{ .Values.api.ingress.host }}
+      secretName: {{ include "exasense.fullname" . }}-api-tls
+  {{- end }}
+  rules:
+    - host: {{ .Values.api.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "exasense.fullname" . }}-api
+                port:
+                  number: {{ .Values.api.service.port }}
+{{- end }}

@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "exasense.fullname" . }}-worker-sim
+  namespace: {{ include "exasense.namespace" . }}
+  labels:
+    {{- include "exasense.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker-sim
+spec:
+  replicas: {{ .Values.workerSim.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "exasense.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker-sim
+  template:
+    metadata:
+      labels:
+        {{- include "exasense.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker-sim
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker-sim
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.workerSim.image.repository }}:{{ .Values.workerSim.image.tag }}"
+          imagePullPolicy: {{ .Values.workerSim.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "exasense.fullname" . }}-config
+          env:
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "exasense.fullname" . }}-secrets
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "exasense.fullname" . }}-secrets
+                  key: MINIO_SECRET_KEY
+          resources:
+            {{- toYaml .Values.workerSim.resources | nindent 12 }}

@@ -1,0 +1,51 @@
+# kube-prometheus-stack Helm values for ExaSense monitoring
+# Install: helm install monitoring prometheus-community/kube-prometheus-stack -f prometheus-values.yaml
+
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    retention: 30d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+
+grafana:
+  enabled: true
+  adminPassword: ""  # Set via secret
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: exasense
+          orgId: 1
+          folder: ExaSense
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/exasense
+  dashboardsConfigMaps:
+    exasense: exasense-grafana-dashboards
+  grafana.ini:
+    server:
+      root_url: https://grafana.exasense.local
+
+alertmanager:
+  config:
+    route:
+      receiver: default
+      group_by: ['alertname', 'namespace']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+    receivers:
+      - name: default
+        # Configure Slack/PagerDuty/email as needed
+
+# Additional scrape configs for Celery/MinIO
+additionalPrometheusRulesMap: {}

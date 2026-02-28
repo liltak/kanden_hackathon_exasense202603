@@ -1,0 +1,171 @@
+# Default values for ExaSense Helm chart
+
+global:
+  namespace: exasense
+  imageRegistry: ""
+  imagePullSecrets: []
+
+# --- API ---
+api:
+  replicaCount: 2
+  image:
+    repository: exasense/api
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  env:
+    JWT_SECRET: ""  # Override via SealedSecret
+    CORS_ORIGINS: ""
+  service:
+    type: ClusterIP
+    port: 8000
+  ingress:
+    enabled: true
+    host: api.exasense.local
+    tls: false
+
+# --- Frontend ---
+frontend:
+  replicaCount: 2
+  image:
+    repository: exasense/frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    NEXT_PUBLIC_API_URL: http://api.exasense.local
+  service:
+    type: ClusterIP
+    port: 3000
+  ingress:
+    enabled: true
+    host: exasense.local
+    tls: false
+
+# --- Worker: Simulation (CPU) ---
+workerSim:
+  replicaCount: 2
+  image:
+    repository: exasense/worker-sim
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 0
+    maxReplicas: 10
+    queueName: simulation
+    queueThreshold: "5"
+
+# --- Worker: GPU ---
+workerGpu:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: exasense/worker-gpu
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "4"
+      memory: 16Gi
+      nvidia.com/gpu: "1"
+    limits:
+      cpu: "8"
+      memory: 32Gi
+      nvidia.com/gpu: "1"
+  autoscaling:
+    enabled: true
+    minReplicas: 0
+    maxReplicas: 2
+    queueName: reconstruction
+    queueThreshold: "1"
+
+# --- Redis ---
+redis:
+  enabled: true
+  image:
+    repository: redis
+    tag: 7-alpine
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+
+# --- PostgreSQL ---
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "16-alpine"
+  auth:
+    database: exasense
+    username: exasense
+    password: ""  # Override via SealedSecret
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: ""
+
+# --- MinIO ---
+minio:
+  enabled: true
+  image:
+    repository: minio/minio
+    tag: latest
+  auth:
+    accessKey: ""  # Override via SealedSecret
+    secretKey: ""  # Override via SealedSecret
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  persistence:
+    enabled: true
+    size: 100Gi
+    storageClass: ""
+
+# --- Network Policy ---
+networkPolicy:
+  enabled: true
+
+# --- Monitoring ---
+monitoring:
+  enabled: false
+  serviceMonitor:
+    interval: 30s

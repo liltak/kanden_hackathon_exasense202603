@@ -1,0 +1,18 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "exasense.fullname" . }}-api
+  namespace: {{ include "exasense.namespace" . }}
+  labels:
+    {{- include "exasense.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "exasense.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+{{- end }}

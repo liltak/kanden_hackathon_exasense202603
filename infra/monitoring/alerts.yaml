@@ -1,0 +1,111 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: exasense-alerts
+  namespace: exasense
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: exasense.api
+      rules:
+        - alert: APIHighErrorRate
+          expr: |
+            sum(rate(http_requests_total{namespace="exasense", status=~"5.."}[5m]))
+            / sum(rate(http_requests_total{namespace="exasense"}[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "ExaSense API error rate > 5%"
+            description: "API is returning {{ $value | humanizePercentage }} 5xx errors."
+
+        - alert: APIHighLatency
+          expr: |
+            histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace="exasense"}[5m])) by (le)) > 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ExaSense API p95 latency > 5s"
+            description: "p95 latency is {{ $value }}s."
+
+    - name: exasense.workers
+      rules:
+        - alert: CeleryQueueBacklog
+          expr: |
+            celery_queue_length{namespace="exasense"} > 100
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Celery queue {{ $labels.queue }} has {{ $value }} pending tasks"
+
+        - alert: CeleryWorkerDown
+          expr: |
+            celery_workers{namespace="exasense"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "No Celery workers available"
+
+    - name: exasense.gpu
+      rules:
+        - alert: GPUMemoryHigh
+          expr: |
+            DCGM_FI_DEV_FB_USED / DCGM_FI_DEV_FB_TOTAL > 0.95
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "GPU memory usage > 95%"
+            description: "GPU {{ $labels.gpu }} memory is at {{ $value | humanizePercentage }}."
+
+        - alert: GPUTemperatureHigh
+          expr: |
+            DCGM_FI_DEV_GPU_TEMP > 85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "GPU temperature > 85°C"
+
+    - name: exasense.infrastructure
+      rules:
+        - alert: PostgreSQLDown
+          expr: |
+            pg_up{namespace="exasense"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PostgreSQL is down"
+
+        - alert: RedisDown
+          expr: |
+            redis_up{namespace="exasense"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Redis is down"
+
+        - alert: DiskSpaceLow
+          expr: |
+            kubelet_volume_stats_available_bytes{namespace="exasense"}
+            / kubelet_volume_stats_capacity_bytes{namespace="exasense"} < 0.15
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Disk space < 15% remaining on {{ $labels.persistentvolumeclaim }}"
+
+        - alert: PodCrashLooping
+          expr: |
+            rate(kube_pod_container_status_restarts_total{namespace="exasense"}[15m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash-looping"

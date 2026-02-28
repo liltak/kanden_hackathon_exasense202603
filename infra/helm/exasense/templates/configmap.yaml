@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "exasense.fullname" . }}-config
+  namespace: {{ include "exasense.namespace" . }}
+  labels:
+    {{- include "exasense.labels" . | nindent 4 }}
+data:
+  REDIS_URL: {{ include "exasense.redisUrl" . | quote }}
+  DATABASE_URL: {{ include "exasense.databaseUrl" . | quote }}
+  MINIO_ENDPOINT: "{{ include "exasense.fullname" . }}-minio:9000"
+  MINIO_SECURE: "false"
+  {{- if .Values.api.env.CORS_ORIGINS }}
+  CORS_ORIGINS: {{ .Values.api.env.CORS_ORIGINS | quote }}
+  {{- end }}

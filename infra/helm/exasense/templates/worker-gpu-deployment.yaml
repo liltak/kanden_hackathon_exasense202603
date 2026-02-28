@@ -1,0 +1,62 @@
+{{- if .Values.workerGpu.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "exasense.fullname" . }}-worker-gpu
+  namespace: {{ include "exasense.namespace" . }}
+  labels:
+    {{- include "exasense.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker-gpu
+spec:
+  replicas: {{ .Values.workerGpu.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "exasense.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker-gpu
+  template:
+    metadata:
+      labels:
+        {{- include "exasense.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker-gpu
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker-gpu
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.workerGpu.image.repository }}:{{ .Values.workerGpu.image.tag }}"
+          imagePullPolicy: {{ .Values.workerGpu.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "exasense.fullname" . }}-config
+          env:
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "exasense.fullname" . }}-secrets
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "exasense.fullname" . }}-secrets
+                  key: MINIO_SECRET_KEY
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: all
+            - name: HF_HOME
+              value: /data/cache/huggingface
+          resources:
+            {{- toYaml .Values.workerGpu.resources | nindent 12 }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: /data/cache
+      volumes:
+        - name: model-cache
+          hostPath:
+            path: /data/exasense/model-cache
+            type: DirectoryOrCreate
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+{{- end }}

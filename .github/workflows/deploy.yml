@@ -1,0 +1,68 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/helm/**'
+      - 'docker/**'
+      - 'src/**'
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+  ARGOCD_SERVER: argocd.exasense.local
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.environment != 'production'
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trigger ArgoCD sync for staging
+        run: |
+          argocd app sync exasense-staging \
+            --server ${{ env.ARGOCD_SERVER }} \
+            --auth-token ${{ secrets.ARGOCD_TOKEN }} \
+            --grpc-web \
+            --prune
+        continue-on-error: true
+
+      - name: Update image tags in staging values
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          echo "Deploying images with tag: ${SHORT_SHA}"
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.environment == 'production'
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trigger ArgoCD sync for production
+        run: |
+          argocd app sync exasense-production \
+            --server ${{ env.ARGOCD_SERVER }} \
+            --auth-token ${{ secrets.ARGOCD_TOKEN }} \
+            --grpc-web \
+            --prune
+        continue-on-error: true
+
+      - name: Update image tags in production values
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          echo "Deploying images with tag: ${SHORT_SHA}"

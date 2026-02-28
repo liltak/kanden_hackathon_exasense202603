@@ -1,0 +1,35 @@
+# Staging environment overrides
+
+api:
+  replicaCount: 1
+  ingress:
+    host: api.staging.exasense.local
+    tls: false
+
+frontend:
+  replicaCount: 1
+  env:
+    NEXT_PUBLIC_API_URL: https://api.staging.exasense.local
+  ingress:
+    host: staging.exasense.local
+    tls: false
+
+workerSim:
+  replicaCount: 1
+  autoscaling:
+    minReplicas: 0
+    maxReplicas: 3
+
+workerGpu:
+  enabled: false
+
+postgres:
+  persistence:
+    size: 10Gi
+
+minio:
+  persistence:
+    size: 20Gi
+
+monitoring:
+  enabled: true

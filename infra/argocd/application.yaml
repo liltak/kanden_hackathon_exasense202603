@@ -1,0 +1,48 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: exasense-staging
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/liltak/kanden-hackathon.git
+    targetRevision: main
+    path: infra/helm/exasense
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-staging.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: exasense-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: exasense-production
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/liltak/kanden-hackathon.git
+    targetRevision: main
+    path: infra/helm/exasense
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-production.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: exasense
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    # Production requires manual sync
