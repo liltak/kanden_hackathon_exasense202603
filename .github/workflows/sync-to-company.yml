@@ -1,0 +1,41 @@
+# 日曜深夜（月曜 3:00 JST = 日曜 18:00 UTC）に個人リポの変更を会社リポに同期
+name: Sync to Company
+
+on:
+  schedule:
+    - cron: '0 18 * * 0'  # 毎週日曜 18:00 UTC = 月曜 3:00 JST
+  workflow_dispatch:  # 手動実行も可能
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+
+      - name: Add company remote
+        run: git remote add company https://x-access-token:${{ secrets.SYNC_PAT }}@github.com/exwzd-aite/kanden_hackathon_exasense.git
+
+      - name: Fetch company main
+        run: git fetch company main
+
+      - name: Check if push is safe (fast-forward possible)
+        run: |
+          git config user.name "sync-bot"
+          git config user.email "sync-bot@users.noreply.github.com"
+          # Merge company into local first to ensure we don't lose company changes
+          if git merge company/main --no-edit; then
+            echo "MERGE_OK=true" >> $GITHUB_ENV
+          else
+            echo "MERGE_OK=false" >> $GITHUB_ENV
+            git merge --abort
+            echo "::warning::Merge conflict detected. Skipping auto-sync."
+          fi
+
+      - name: Push to both remotes
+        if: env.MERGE_OK == 'true'
+        run: |
+          git push origin main
+          git push company main
