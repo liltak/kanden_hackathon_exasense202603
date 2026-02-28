@@ -7,6 +7,7 @@ solar positions → ray casting → irradiance → ROI → visualization.
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import trimesh
 import yaml
 from rich.console import Console
@@ -21,6 +22,7 @@ from .visualization import (
     create_sun_path_diagram,
     save_heatmap_html,
 )
+from .weather import load_epw
 
 console = Console()
 
@@ -126,17 +128,31 @@ def run_simulation(
         )
         progress.advance(task)
 
-        # Step 2: Clear sky irradiance
-        progress.update(task, description="Computing clear sky irradiance...")
-        cs = compute_clear_sky_irradiance(
-            latitude=loc["latitude"],
-            longitude=loc["longitude"],
-            year=sim["year"],
-            freq_minutes=sim["time_resolution_minutes"],
-            timezone=loc["timezone"],
-            altitude=loc.get("altitude", 0),
-            model=sim.get("dni_model", "ineichen"),
-        )
+        # Step 2: Weather / irradiance data
+        epw_path = sim.get("epw_file")
+        if epw_path:
+            progress.update(task, description="Loading EPW weather data...")
+            epw_file = Path(epw_path)
+            if not epw_file.is_absolute():
+                epw_file = Path(__file__).parent.parent.parent / epw_file
+            weather = load_epw(epw_file, year=sim["year"])
+            cs = pd.DataFrame(
+                {"ghi": weather.ghi, "dni": weather.dni, "dhi": weather.dhi},
+                index=weather.times,
+            )
+            console.print(f"[yellow]Weather source: {weather.source}")
+        else:
+            progress.update(task, description="Computing clear sky irradiance...")
+            cs = compute_clear_sky_irradiance(
+                latitude=loc["latitude"],
+                longitude=loc["longitude"],
+                year=sim["year"],
+                freq_minutes=sim["time_resolution_minutes"],
+                timezone=loc["timezone"],
+                altitude=loc.get("altitude", 0),
+                model=sim.get("dni_model", "ineichen"),
+            )
+            console.print("[yellow]Weather source: clear-sky model")
         progress.advance(task)
 
         # Step 3: Ray casting
