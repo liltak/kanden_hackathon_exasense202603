@@ -104,7 +104,7 @@ def _mesh_to_glb(mesh, irradiance_results=None) -> bytes:
         vmin, vmax = values.min(), max(values.max(), 1)
         norm = (values - vmin) / (vmax - vmin)
         colors_rgba = (cm.YlOrRd(norm) * 255).astype(np.uint8)
-        mesh.visual = _trimesh.visual.ColorVisual(face_colors=colors_rgba)
+        mesh.visual = _trimesh.visual.ColorVisuals(face_colors=colors_rgba)
     else:
         nz = mesh.face_normals[:, 2]
         colors = np.zeros((len(mesh.faces), 4), dtype=np.uint8)
@@ -115,7 +115,7 @@ def _mesh_to_glb(mesh, irradiance_results=None) -> bytes:
                 colors[i] = [144, 164, 174, 255]
             else:
                 colors[i] = [141, 110, 99, 255]
-        mesh.visual = _trimesh.visual.ColorVisual(face_colors=colors)
+        mesh.visual = _trimesh.visual.ColorVisuals(face_colors=colors)
 
     # Z-up to Y-up conversion for Three.js
     import numpy as np
@@ -221,6 +221,54 @@ async def get_demo_heatmap(mesh_type: str, task_id: str | None = None):
         sim = _sim_store.get(task_id)
         if sim:
             irradiance = sim.get("irradiance")
+
+    glb_bytes = _mesh_to_glb(mesh, irradiance)
+    return Response(content=glb_bytes, media_type="model/gltf-binary")
+
+
+@router.get("/demo/{mesh_type}/heatmap/monthly")
+async def get_demo_monthly_heatmap(
+    mesh_type: str,
+    month: int = 6,
+    lat: float = 34.69,
+    lng: float = 135.50,
+    freq: int = 60,
+):
+    """Get demo mesh with monthly irradiance heatmap as GLB."""
+    import numpy as np
+
+    from ...simulation.demo_factory import create_factory_complex, create_simple_factory
+    from ...simulation.irradiance import compute_monthly_irradiance
+    from ...simulation.ray_caster import compute_shadow_matrix
+    from ...simulation.solar_position import (
+        compute_clear_sky_irradiance,
+        compute_solar_positions,
+    )
+
+    if mesh_type not in ("simple", "complex"):
+        raise HTTPException(status_code=400, detail="Invalid mesh type")
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="Month must be 1-12")
+
+    mesh = create_factory_complex() if mesh_type == "complex" else create_simple_factory()
+
+    solar = compute_solar_positions(latitude=lat, longitude=lng, year=2025, freq_minutes=freq)
+    cs = compute_clear_sky_irradiance(latitude=lat, longitude=lng, year=2025, freq_minutes=freq)
+
+    sun_dirs = solar.sun_direction_vectors()
+    shadow_mat = compute_shadow_matrix(mesh, sun_dirs, solar.sun_visible)
+
+    irradiance = compute_monthly_irradiance(
+        face_normals=mesh.face_normals,
+        face_areas=mesh.area_faces,
+        shadow_matrix=shadow_mat,
+        sun_directions=sun_dirs,
+        dni=cs["dni"].values,
+        dhi=cs["dhi"].values,
+        times=solar.times,
+        time_step_hours=freq / 60.0,
+        month=month,
+    )
 
     glb_bytes = _mesh_to_glb(mesh, irradiance)
     return Response(content=glb_bytes, media_type="model/gltf-binary")

@@ -165,6 +165,48 @@ def compute_face_irradiance(
     return results
 
 
+def compute_monthly_irradiance(
+    face_normals: np.ndarray,
+    face_areas: np.ndarray,
+    shadow_matrix: np.ndarray,
+    sun_directions: np.ndarray,
+    dni: np.ndarray,
+    dhi: np.ndarray,
+    times: pd.DatetimeIndex,
+    time_step_hours: float = 1.0,
+    month: int = 6,
+) -> list[FaceIrradiance]:
+    """Compute irradiance for a single month.
+
+    Same as compute_face_irradiance but filtered to the specified month.
+    Returns FaceIrradiance with monthly (not annual) totals.
+    """
+    month_mask = times.month == month
+    if not month_mask.any():
+        return [
+            FaceIrradiance(
+                face_id=i,
+                annual_irradiance_kwh_m2=0.0,
+                annual_direct_kwh_m2=0.0,
+                annual_diffuse_kwh_m2=0.0,
+                area_m2=float(face_areas[i]),
+                normal=tuple(face_normals[i].tolist()),
+                sun_hours=0.0,
+            )
+            for i in range(face_normals.shape[0])
+        ]
+
+    return compute_face_irradiance(
+        face_normals=face_normals,
+        face_areas=face_areas,
+        shadow_matrix=shadow_matrix[month_mask],
+        sun_directions=sun_directions[month_mask],
+        dni=dni[month_mask],
+        dhi=dhi[month_mask],
+        time_step_hours=time_step_hours,
+    )
+
+
 def save_irradiance_results(results: list[FaceIrradiance], output_path: Path) -> None:
     """Save irradiance results to JSON."""
     data = [

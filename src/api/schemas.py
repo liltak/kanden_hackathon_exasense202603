@@ -118,3 +118,34 @@ class ConfigResponse(BaseModel):
     panel: dict
     electricity: dict
     mesh: dict
+
+
+# ── Solar Animation ──────────────────────────────────────────────────────────
+
+
+class SunPositionEntry(BaseModel):
+    time: str = Field(description="HH:MM format")
+    azimuth: float = Field(description="Degrees, 0=North, clockwise")
+    elevation: float = Field(description="Degrees above horizon")
+    direction_y_up: list[float] = Field(
+        description="Unit vector [x, y, z] in Three.js Y-up coords"
+    )
+
+
+class SunPositionsResponse(BaseModel):
+    date: str
+    latitude: float
+    longitude: float
+    freq_minutes: int
+    positions: list[SunPositionEntry]
+
+
+class ShadowTimelineResponse(BaseModel):
+    date: str
+    mesh_source: str
+    n_faces: int
+    n_steps: int
+    times: list[str]
+    shadow_matrix: list[list[bool]] = Field(
+        description="(n_steps x n_faces) — True if face is illuminated"
+    )

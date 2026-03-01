@@ -15,7 +15,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import close_db, init_db
-from .routes import auth, chat, mesh, report, simulation
+from .routes import auth, chat, mesh, report, simulation, solar_animation
 from .schemas import ConfigResponse
 from .ws import manager as ws_manager
 
@@ -72,6 +72,7 @@ app.include_router(simulation.router)
 app.include_router(mesh.router)
 app.include_router(chat.router)
 app.include_router(report.router)
+app.include_router(solar_animation.router)
 
 
 @app.get("/health")
