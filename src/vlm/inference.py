@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 
+from src.vlm.model_loader import ModelConfig, get_vram_usage_mb, load_model
+
 if TYPE_CHECKING:
     import torch
     from PIL import Image

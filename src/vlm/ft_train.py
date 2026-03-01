@@ -16,6 +16,8 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from src.vlm.model_loader import get_vram_summary, get_vram_usage_mb
+
 if TYPE_CHECKING:
     import torch
 
