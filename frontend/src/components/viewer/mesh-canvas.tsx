@@ -2,7 +2,7 @@
 
 import { Environment, OrbitControls, useGLTF } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
-import { Component, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, Suspense, useEffect, useMemo, useRef, type ReactNode } from "react";
 import * as THREE from "three";
 
 import type { SunPositionEntry } from "@/lib/types";
@@ -161,16 +161,10 @@ export function MeshCanvas({
   solarActive = false,
   meshRotation,
 }: MeshCanvasProps) {
-  const [key, setKey] = useState(0);
-
-  useEffect(() => {
-    setKey((k) => k + 1);
-  }, [url]);
-
   return (
     <div className="h-[600px] w-full rounded-xl border bg-gray-50">
-      <MeshErrorBoundary resetKey={key} fallback={<ErrorFallback />}>
-        <Canvas key={key} camera={{ position: [30, 30, 30], fov: 50 }}>
+      <MeshErrorBoundary resetKey={url ? 1 : 0} fallback={<ErrorFallback />}>
+        <Canvas camera={{ position: [30, 30, 30], fov: 50 }}>
           {!solarActive && (
             <>
               <ambientLight intensity={0.5} />
@@ -182,6 +176,7 @@ export function MeshCanvas({
           <Suspense fallback={<LoadingFallback />}>
             {url ? (
               <Model
+                key={url}
                 url={url}
                 sunDirection={currentSunPosition?.direction_y_up ?? null}
                 shadowRow={currentShadow}

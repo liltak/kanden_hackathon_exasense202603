@@ -149,3 +149,15 @@ class ShadowTimelineResponse(BaseModel):
     shadow_matrix: list[list[bool]] = Field(
         description="(n_steps x n_faces) — True if face is illuminated"
     )
+
+
+# ── Reconstruction ──────────────────────────────────────────────────────────
+
+
+class ReconstructionStatus(BaseModel):
+    task_id: str
+    status: str = Field(description="pending | running | complete | failed")
+    progress: float = Field(0.0, ge=0, le=1)
+    step: str | None = None
+    message: str | None = None
+    mesh_id: str | None = None

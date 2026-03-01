@@ -113,3 +113,27 @@ export interface ShadowTimelineResponse {
   times: string[];
   shadow_matrix: boolean[][];
 }
+
+// Preset / pre-built reconstruction data
+
+export interface PresetInfo {
+  name: string;
+  n_faces: number;
+  n_vertices: number;
+  surface_area_m2: number;
+}
+
+export interface PresetsResponse {
+  presets: PresetInfo[];
+}
+
+// Reconstruction types
+
+export interface ReconstructionStatus {
+  task_id: string;
+  status: "pending" | "running" | "complete" | "failed";
+  progress: number;
+  step: string | null;
+  message: string | null;
+  mesh_id: string | null;
+}

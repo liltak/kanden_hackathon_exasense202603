@@ -59,8 +59,8 @@ export function MeshAdjustControls({ rotation, onChange }: MeshAdjustControlsPro
           </div>
           <Slider
             value={[rotation.tiltX]}
-            min={-45}
-            max={45}
+            min={-180}
+            max={180}
             step={1}
             onValueChange={([v]) => update({ tiltX: v })}
           />
@@ -74,8 +74,8 @@ export function MeshAdjustControls({ rotation, onChange }: MeshAdjustControlsPro
           </div>
           <Slider
             value={[rotation.tiltZ]}
-            min={-45}
-            max={45}
+            min={-180}
+            max={180}
             step={1}
             onValueChange={([v]) => update({ tiltZ: v })}
           />

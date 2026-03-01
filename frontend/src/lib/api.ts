@@ -4,6 +4,8 @@ import type {
   ChatResponse,
   MeshInfo,
   MonthlyGHI,
+  PresetsResponse,
+  ReconstructionStatus,
   ReportResponse,
   ShadowTimelineResponse,
   SimulationRequest,
@@ -118,6 +120,56 @@ export function getMonthlyHeatmapURL(
   month: number,
 ): string {
   return `${API_BASE}/api/mesh/demo/${type}/heatmap/monthly?month=${month}`;
+}
+
+// Presets (pre-built H100 reconstruction data)
+export async function getPresets(): Promise<PresetsResponse> {
+  return fetchJSON("/api/reconstruction/presets");
+}
+
+export async function loadPreset(name: string): Promise<ReconstructionStatus> {
+  const formData = new FormData();
+  formData.append("name", name);
+  const res = await fetch(`${API_BASE}/api/reconstruction/load-preset`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`API error ${res.status}: ${body}`);
+  }
+  return res.json();
+}
+
+// Reconstruction
+export async function startReconstruction(
+  files: File[],
+  method: "vggt" | "colmap" = "vggt",
+): Promise<ReconstructionStatus> {
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append("files", file);
+  }
+  formData.append("method", method);
+  const res = await fetch(`${API_BASE}/api/reconstruction/start`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`API error ${res.status}: ${body}`);
+  }
+  return res.json();
+}
+
+export async function getReconstructionStatus(
+  taskId: string,
+): Promise<ReconstructionStatus> {
+  return fetchJSON(`/api/reconstruction/${taskId}`);
+}
+
+export function getMeshGlbURL(meshId: string): string {
+  return `${API_BASE}/api/mesh/${meshId}/glb`;
 }
 
 // WebSocket
