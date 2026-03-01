@@ -95,8 +95,10 @@ def _load_images(image_dir: Path, max_images: int | None = None) -> tuple[list[I
     if not image_paths:
         raise FileNotFoundError(f"No images found in {image_dir}")
 
-    if max_images is not None:
-        image_paths = image_paths[:max_images]
+    if max_images is not None and len(image_paths) > max_images:
+        # Uniform sampling: pick evenly-spaced indices to cover the full sequence
+        indices = np.linspace(0, len(image_paths) - 1, max_images, dtype=int)
+        image_paths = [image_paths[i] for i in indices]
 
     images = []
     names = []
@@ -147,7 +149,7 @@ def _save_point_cloud_ply(
     colors: np.ndarray,
     output_path: Path,
 ) -> None:
-    """Save point cloud as PLY file.
+    """Save point cloud as binary PLY file.
 
     Args:
         points: (N, 3) float array of xyz coordinates.
@@ -159,7 +161,7 @@ def _save_point_cloud_ply(
 
     header = (
         "ply\n"
-        "format ascii 1.0\n"
+        "format binary_little_endian 1.0\n"
         f"element vertex {n}\n"
         "property float x\n"
         "property float y\n"
@@ -170,12 +172,23 @@ def _save_point_cloud_ply(
         "end_header\n"
     )
 
-    with open(output_path, "w") as f:
-        f.write(header)
-        for i in range(n):
-            x, y, z = points[i]
-            r, g, b = colors_uint8[i]
-            f.write(f"{x:.6f} {y:.6f} {z:.6f} {r} {g} {b}\n")
+    # Build structured array for single-pass binary write
+    vertex_dtype = np.dtype([
+        ("x", "<f4"), ("y", "<f4"), ("z", "<f4"),
+        ("red", "u1"), ("green", "u1"), ("blue", "u1"),
+    ])
+    vertices = np.empty(n, dtype=vertex_dtype)
+    pts = points.astype(np.float32)
+    vertices["x"] = pts[:, 0]
+    vertices["y"] = pts[:, 1]
+    vertices["z"] = pts[:, 2]
+    vertices["red"] = colors_uint8[:, 0]
+    vertices["green"] = colors_uint8[:, 1]
+    vertices["blue"] = colors_uint8[:, 2]
+
+    with open(output_path, "wb") as f:
+        f.write(header.encode("ascii"))
+        f.write(vertices.tobytes())
 
 
 def run_vggt(
@@ -251,8 +264,9 @@ def run_vggt(
             if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
             and not p.name.startswith(".")
         )
-        if max_images is not None:
-            image_paths = image_paths[:max_images]
+        if max_images is not None and len(image_paths) > max_images:
+            indices = np.linspace(0, len(image_paths) - 1, max_images, dtype=int)
+            image_paths = [image_paths[i] for i in indices]
 
         images_tensor = load_and_preprocess_images([str(p) for p in image_paths])
         images_tensor = images_tensor.to(torch_device)

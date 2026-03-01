@@ -44,7 +44,7 @@ class TestCalculatePanelProposal:
         assert p_high.npv_25y_jpy > p_low.npv_25y_jpy
 
     def test_too_small_area_returns_none(self):
-        face = make_test_face(area=0.5)
+        face = make_test_face(area=0.001)  # usable = 0.0007 < 0.001 threshold
         proposal = calculate_panel_proposal(face)
         assert proposal is None
 
@@ -60,7 +60,7 @@ class TestGenerateROIReport:
             make_test_face(0, irradiance=1200, area=100),
             make_test_face(1, irradiance=1000, area=50),
             make_test_face(2, irradiance=200, area=100),   # too low
-            make_test_face(3, irradiance=1100, area=0.5),   # too small
+            make_test_face(3, irradiance=1100, area=0.001),  # too small (usable < 0.001)
         ]
         report = generate_roi_report(faces)
         assert len(report.proposals) == 2  # only face 0 and 1

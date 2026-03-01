@@ -257,20 +257,26 @@ class MeshProcessor:
 
     def preprocess_point_cloud(
         self,
-        voxel_size: float = 0.02,
+        voxel_size: float | None = None,
         stat_nb_neighbors: int = 20,
         stat_std_ratio: float = 2.0,
         radius_nb_points: int = 16,
-        radius: float = 0.05,
+        radius: float | None = None,
+        target_points: int = 200_000,
     ) -> MeshProcessor:
         """Voxel downsample + 2-stage outlier removal for cleaner reconstruction.
 
+        If voxel_size is None, it is auto-computed from the point cloud extent
+        to keep approximately target_points after downsampling. This handles
+        both real-world scale (meters) and normalized coordinates (VGGT output).
+
         Args:
-            voxel_size: Voxel size for downsampling (meters).
+            voxel_size: Voxel size for downsampling. None = auto.
             stat_nb_neighbors: Neighbors for statistical outlier removal.
             stat_std_ratio: Standard deviation ratio for statistical filter.
             radius_nb_points: Min points in radius for radius outlier removal.
-            radius: Search radius for radius outlier removal.
+            radius: Search radius for radius outlier removal. None = auto.
+            target_points: Approximate point count target for auto voxel sizing.
 
         Returns:
             self for chaining.
@@ -281,12 +287,29 @@ class MeshProcessor:
         if self._pcd is None:
             raise ValueError("No point cloud loaded. Call load_point_cloud() first.")
 
-        n_before = len(np.asarray(self._pcd.points))
+        points = np.asarray(self._pcd.points)
+        n_before = len(points)
+
+        # Auto-compute voxel_size from point cloud extent if not specified
+        if voxel_size is None:
+            extent = points.max(axis=0) - points.min(axis=0)
+            volume = float(np.prod(extent))
+            if volume > 0 and n_before > target_points:
+                # voxel_size³ * target_points ≈ volume
+                voxel_size = (volume / target_points) ** (1.0 / 3.0)
+            else:
+                # Very small cloud or already sparse — use tiny voxel (basically no-op)
+                voxel_size = float(extent.max()) * 0.001
+            console.print(f"    Auto voxel_size: {voxel_size:.6f} (extent: {extent.round(3)})")
+
+        # Auto-compute radius from voxel_size if not specified
+        if radius is None:
+            radius = voxel_size * 2.5
 
         # Stage 1: Voxel downsampling for spatial uniformity
         self._pcd = self._pcd.voxel_down_sample(voxel_size)
         n_after_voxel = len(np.asarray(self._pcd.points))
-        console.print(f"    Voxel downsample ({voxel_size}m): {n_before:,} → {n_after_voxel:,}")
+        console.print(f"    Voxel downsample ({voxel_size:.6f}): {n_before:,} → {n_after_voxel:,}")
 
         # Stage 2: Statistical outlier removal
         self._pcd, _ = self._pcd.remove_statistical_outlier(
@@ -415,7 +438,17 @@ class MeshProcessor:
             pcd.estimate_normals(
                 search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30)
             )
-            pcd.orient_normals_consistent_tangent_plane(k=15)
+            n_points = len(np.asarray(pcd.points))
+            if n_points > 50_000:
+                # O(n) camera-based orientation for large point clouds
+                console.print(f"    Orient normals (camera-based, {n_points:,} points)...")
+                pcd.orient_normals_towards_camera_location(
+                    camera_location=np.array([0.0, 0.0, 10.0])
+                )
+            else:
+                # O(n²) tangent plane for small point clouds (higher quality)
+                console.print(f"    Orient normals (tangent plane, {n_points:,} points)...")
+                pcd.orient_normals_consistent_tangent_plane(k=15)
 
         mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
             pcd, depth=depth, width=width, scale=scale, linear_fit=linear_fit
@@ -1011,10 +1044,10 @@ def process_reconstruction(
     geo_ref: GeoReference | None = None,
     depth_dir: Path | None = None,
     camera_poses_path: Path | None = None,
-    poisson_depth: int = 7,
-    voxel_size: float = 0.02,
+    poisson_depth: int = 9,
+    voxel_size: float | None = None,
     smooth_iterations: int = 10,
-    target_faces: int = 20000,
+    target_faces: int = 50000,
 ) -> ProcessingResult:
     """Convenience function to run the full mesh processing pipeline.
 

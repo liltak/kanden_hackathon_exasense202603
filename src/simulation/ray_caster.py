@@ -110,11 +110,19 @@ def compute_shadow_matrix(
     n_times = len(sun_directions)
     n_faces = len(mesh.faces)
 
-    # Filter faces by area
+    # Filter faces by area (with auto-scaling for small-face meshes)
     face_indices = None
     if min_face_area > 0:
         areas = mesh.area_faces
         valid = areas >= min_face_area
+        # Auto-scale: if filter removes >95% of faces, use 10th percentile instead
+        if valid.sum() < len(areas) * 0.05 and len(areas) > 0:
+            adjusted_min = float(np.percentile(areas, 10))
+            logger.info(
+                "min_face_area %.4f filters >95%% faces; auto-adjusting to %.6f (p10)",
+                min_face_area, adjusted_min,
+            )
+            valid = areas >= adjusted_min
         face_indices = np.where(valid)[0]
 
     shadow_matrix = np.zeros((n_times, n_faces), dtype=bool)

@@ -70,7 +70,7 @@ def calculate_panel_proposal(
     """
     usable_area = face.area_m2 * usable_area_ratio
 
-    if usable_area < 1.0 or face.annual_irradiance_kwh_m2 < 100:
+    if usable_area < 0.001 or face.annual_irradiance_kwh_m2 < 100:
         return None
 
     # 1 kWp ≈ ~5-7 m^2 of panel area (assuming ~150-200 W/m^2 panel rating)

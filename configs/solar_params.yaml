@@ -28,7 +28,7 @@ electricity:
 
 mesh:
   max_faces_for_simulation: 10000
-  min_face_area_m2: 0.5          # Skip tiny faces
+  min_face_area_m2: 0.001        # Skip tiny faces (lowered for VGGT meshes)
   preprocessing:
     voxel_size: 0.02             # Voxel downsample size (meters)
     stat_nb_neighbors: 20        # Statistical outlier: neighbor count
