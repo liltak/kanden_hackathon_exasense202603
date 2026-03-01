@@ -1,0 +1,210 @@
+[
+  {
+    "face_id": 0,
+    "annual_irradiance_kwh_m2": 350.56,
+    "annual_direct_kwh_m2": 0.0,
+    "annual_diffuse_kwh_m2": 350.56,
+    "area_m2": 400.0,
+    "normal": [
+      0.0,
+      0.0,
+      1.0
+    ],
+    "sun_hours": 0.0
+  },
+  {
+    "face_id": 1,
+    "annual_irradiance_kwh_m2": 350.56,
+    "annual_direct_kwh_m2": 0.0,
+    "annual_diffuse_kwh_m2": 350.56,
+    "area_m2": 400.0,
+    "normal": [
+      0.0,
+      -0.0,
+      1.0
+    ],
+    "sun_hours": 0.0
+  },
+  {
+    "face_id": 2,
+    "annual_irradiance_kwh_m2": 1597.89,
+    "annual_direct_kwh_m2": 1190.91,
+    "annual_diffuse_kwh_m2": 406.98,
+    "area_m2": 160.0,
+    "normal": [
+      0.0,
+      -1.0,
+      0.0
+    ],
+    "sun_hours": 3533.0
+  },
+  {
+    "face_id": 3,
+    "annual_irradiance_kwh_m2": 1597.89,
+    "annual_direct_kwh_m2": 1190.91,
+    "annual_diffuse_kwh_m2": 406.98,
+    "area_m2": 160.0,
+    "normal": [
+      0.0,
+      -1.0,
+      0.0
+    ],
+    "sun_hours": 3533.0
+  },
+  {
+    "face_id": 4,
+    "annual_irradiance_kwh_m2": 369.78,
+    "annual_direct_kwh_m2": 43.0,
+    "annual_diffuse_kwh_m2": 326.78,
+    "area_m2": 160.0,
+    "normal": [
+      0.0,
+      1.0,
+      -0.0
+    ],
+    "sun_hours": 905.0
+  },
+  {
+    "face_id": 5,
+    "annual_irradiance_kwh_m2": 369.78,
+    "annual_direct_kwh_m2": 43.0,
+    "annual_diffuse_kwh_m2": 326.78,
+    "area_m2": 160.0,
+    "normal": [
+      0.0,
+      1.0,
+      -0.0
+    ],
+    "sun_hours": 905.0
+  },
+  {
+    "face_id": 6,
+    "annual_irradiance_kwh_m2": 410.23,
+    "annual_direct_kwh_m2": 0.0,
+    "annual_diffuse_kwh_m2": 410.23,
+    "area_m2": 120.0,
+    "normal": [
+      1.0,
+      0.0,
+      -0.0
+    ],
+    "sun_hours": 0.0
+  },
+  {
+    "face_id": 7,
+    "annual_irradiance_kwh_m2": 410.23,
+    "annual_direct_kwh_m2": 0.0,
+    "annual_diffuse_kwh_m2": 410.23,
+    "area_m2": 40.0,
+    "normal": [
+      1.0,
+      0.0,
+      -0.0
+    ],
+    "sun_hours": 0.0
+  },
+  {
+    "face_id": 8,
+    "annual_irradiance_kwh_m2": 410.23,
+    "annual_direct_kwh_m2": 0.0,
+    "annual_diffuse_kwh_m2": 410.23,
+    "area_m2": 40.0,
+    "normal": [
+      1.0,
+      0.0,
+      -0.0
+    ],
+    "sun_hours": 0.0
+  },
+  {
+    "face_id": 9,
+    "annual_irradiance_kwh_m2": 1199.08,
+    "annual_direct_kwh_m2": 788.85,
+    "annual_diffuse_kwh_m2": 410.23,
+    "area_m2": 120.0,
+    "normal": [
+      1.0,
+      0.0,
+      -0.0
+    ],
+    "sun_hours": 2215.0
+  },
+  {
+    "face_id": 10,
+    "annual_irradiance_kwh_m2": 1199.08,
+    "annual_direct_kwh_m2": 788.85,
+    "annual_diffuse_kwh_m2": 410.23,
+    "area_m2": 40.0,
+    "normal": [
+      1.0,
+      0.0,
+      -0.0
+    ],
+    "sun_hours": 2215.0
+  },
+  {
+    "face_id": 11,
+    "annual_irradiance_kwh_m2": 1199.08,
+    "annual_direct_kwh_m2": 788.85,
+    "annual_diffuse_kwh_m2": 410.23,
+    "area_m2": 40.0,
+    "normal": [
+      1.0,
+      0.0,
+      -0.0
+    ],
+    "sun_hours": 2215.0
+  },
+  {
+    "face_id": 12,
+    "annual_irradiance_kwh_m2": 2468.22,
+    "annual_direct_kwh_m2": 2068.12,
+    "annual_diffuse_kwh_m2": 400.1,
+    "area_m2": 215.4066,
+    "normal": [
+      0.0,
+      -0.3714,
+      0.9285
+    ],
+    "sun_hours": 4292.0
+  },
+  {
+    "face_id": 13,
+    "annual_irradiance_kwh_m2": 2468.22,
+    "annual_direct_kwh_m2": 2068.12,
+    "annual_diffuse_kwh_m2": 400.1,
+    "area_m2": 215.4066,
+    "normal": [
+      0.0,
+      -0.3714,
+      0.9285
+    ],
+    "sun_hours": 4292.0
+  },
+  {
+    "face_id": 14,
+    "annual_irradiance_kwh_m2": 1562.58,
+    "annual_direct_kwh_m2": 1221.52,
+    "annual_diffuse_kwh_m2": 341.06,
+    "area_m2": 215.4066,
+    "normal": [
+      0.0,
+      0.3714,
+      0.9285
+    ],
+    "sun_hours": 4125.0
+  },
+  {
+    "face_id": 15,
+    "annual_irradiance_kwh_m2": 1562.58,
+    "annual_direct_kwh_m2": 1221.52,
+    "annual_diffuse_kwh_m2": 341.06,
+    "area_m2": 215.4066,
+    "normal": [
+      -0.0,
+      0.3714,
+      0.9285
+    ],
+    "sun_hours": 4125.0
+  }
+]

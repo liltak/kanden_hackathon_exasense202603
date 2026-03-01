@@ -19,5 +19,9 @@ build/
 data/.cache/
 wandb/
 
+# Node.js
+node_modules/
+frontend/.next/
+
 # Environment
 .env
