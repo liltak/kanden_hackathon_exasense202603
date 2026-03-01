@@ -1,4 +1,4 @@
-"""Training data formatter for Qwen3.5-VL fine-tuning.
+"""Training data formatter for Qwen2.5-VL fine-tuning.
 
 Converts simulation results + images into ChatML format JSONL
 compatible with Unsloth training pipeline.

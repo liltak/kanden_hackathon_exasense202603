@@ -1,6 +1,6 @@
-"""Qwen3.5-VL model loader for solar panel analysis.
+"""Qwen2.5-VL model loader for solar panel analysis.
 
-Loads Qwen/Qwen3.5-VL-7B-Instruct from HuggingFace with optional 4-bit quantization.
+Loads Qwen/Qwen2.5-VL-7B-Instruct from HuggingFace with optional 4-bit quantization.
 Targets H100 GPU server for inference and fine-tuning.
 """
 
@@ -17,12 +17,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 console = Console()
 
-MODEL_ID = "Qwen/Qwen3.5-VL-7B-Instruct"
+MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
 
 
 @dataclass
 class ModelConfig:
-    """Configuration for Qwen3.5-VL model loading."""
+    """Configuration for Qwen2.5-VL model loading."""
 
     model_id: str = MODEL_ID
     quantize_4bit: bool = False
@@ -74,7 +74,7 @@ def get_vram_summary() -> dict[str, float]:
     return {
         "allocated_mb": torch.cuda.memory_allocated() / 1024 / 1024,
         "reserved_mb": torch.cuda.memory_reserved() / 1024 / 1024,
-        "total_mb": torch.cuda.get_device_properties(0).total_mem / 1024 / 1024,
+        "total_mb": torch.cuda.get_device_properties(0).total_memory / 1024 / 1024,
     }
 
 
@@ -93,7 +93,7 @@ def _build_quantization_config():
 def load_model(
     config: ModelConfig | None = None,
 ) -> tuple:
-    """Load Qwen3.5-VL model and processor.
+    """Load Qwen2.5-VL model and processor.
 
     Args:
         config: Model configuration. Uses defaults if None.
@@ -115,7 +115,7 @@ def load_model(
     t0 = time.perf_counter()
 
     model_kwargs: dict = {
-        "torch_dtype": get_torch_dtype(config.torch_dtype),
+        "dtype": get_torch_dtype(config.torch_dtype),
         "device_map": config.device_map,
         "trust_remote_code": config.trust_remote_code,
         "attn_implementation": config.attn_implementation,
@@ -193,7 +193,7 @@ def load_model_simple(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Load Qwen3.5-VL model")
+    parser = argparse.ArgumentParser(description="Load Qwen2.5-VL model")
     parser.add_argument("--model-id", default=MODEL_ID, help="HuggingFace model ID")
     parser.add_argument("--quantize", action="store_true", help="Enable 4-bit quantization")
     parser.add_argument("--dtype", default="bfloat16", choices=["float16", "bfloat16", "float32"])

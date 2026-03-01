@@ -1,4 +1,4 @@
-"""Unsloth fine-tuning pipeline for Qwen3.5-VL.
+"""Unsloth fine-tuning pipeline for Qwen2.5-VL.
 
 LoRA-based fine-tuning with VRAM monitoring, checkpoint saving,
 and optional Wandb logging. Targets H100 GPU server.
@@ -27,7 +27,7 @@ console = Console()
 
 @dataclass
 class LoRAConfig:
-    """LoRA configuration for Qwen3.5-VL fine-tuning."""
+    """LoRA configuration for Qwen2.5-VL fine-tuning."""
 
     r: int = 16
     lora_alpha: int = 32
@@ -116,7 +116,7 @@ def setup_wandb(config: TrainingConfig) -> None:
 
 
 def load_model_for_training(
-    model_id: str = "Qwen/Qwen3.5-VL-7B-Instruct",
+    model_id: str = "Qwen/Qwen2.5-VL-7B-Instruct",
     lora_config: LoRAConfig | None = None,
     max_seq_length: int = 2048,
     load_in_4bit: bool = True,
@@ -404,11 +404,11 @@ def save_merged_model(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Fine-tune Qwen3.5-VL with Unsloth + LoRA")
+    parser = argparse.ArgumentParser(description="Fine-tune Qwen2.5-VL with Unsloth + LoRA")
     parser.add_argument("--train-data", required=True, help="Path to training JSONL")
     parser.add_argument("--eval-data", default=None, help="Path to eval JSONL")
     parser.add_argument("--output-dir", default="outputs/vlm-finetune")
-    parser.add_argument("--model-id", default="Qwen/Qwen3.5-VL-7B-Instruct")
+    parser.add_argument("--model-id", default="Qwen/Qwen2.5-VL-7B-Instruct")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--grad-accum", type=int, default=8)

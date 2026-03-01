@@ -1,7 +1,7 @@
 """VLM inference pipeline for solar panel analysis.
 
 Accepts images + text prompts and generates structured markdown reports
-using Qwen3.5-VL for facility analysis, panel placement, and ROI estimation.
+using Qwen2.5-VL for facility analysis, panel placement, and ROI estimation.
 """
 
 from __future__ import annotations
@@ -208,7 +208,7 @@ class VLMPipeline:
         images: list[Image.Image],
         prompt: str,
     ) -> list[dict]:
-        """Build ChatML messages for Qwen3.5-VL."""
+        """Build ChatML messages for Qwen2.5-VL."""
         content: list[dict] = []
 
         for img in images:
