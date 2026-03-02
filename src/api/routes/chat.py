@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models import Simulation
 from ..schemas import ChatRequest, ChatResponse
+from ..vlm_bridge import get_pipeline, has_gpu, render_heatmap_png
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -165,6 +172,56 @@ def _generate_response(message: str, roi, irr, from_db: bool) -> str:
 - 「投資回収の詳細」"""
 
 
+async def _try_vlm_response(message: str, roi, irr, from_db: bool) -> str | None:
+    """Attempt VLM-powered response. Returns None if unavailable or on error."""
+    if not has_gpu():
+        return None
+
+    pipeline = get_pipeline()
+    if pipeline is None:
+        return None
+
+    # Get mesh from _sim_store
+    from .. import _sim_store
+
+    mesh = None
+    for key in reversed(list(_sim_store.keys())):
+        if key.startswith("_"):
+            continue
+        sim = _sim_store[key]
+        if "mesh" in sim:
+            mesh = sim["mesh"]
+            break
+
+    if mesh is None:
+        logger.debug("VLM skipped: no mesh available")
+        return None
+
+    try:
+        from PIL import Image
+
+        png_bytes = render_heatmap_png(mesh, irr)
+        heatmap_img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+
+        # Build context string
+        if from_db:
+            context = _build_context_from_dict(roi)
+        else:
+            context = _build_context(roi, irr)
+
+        result = await asyncio.to_thread(
+            pipeline.ask,
+            images=[heatmap_img],
+            question=message,
+            context_data=context,
+        )
+        logger.info("VLM response: %.1fs, %d tokens", result.latency_seconds, result.output_tokens)
+        return result.text
+    except Exception:
+        logger.exception("VLM inference failed, falling back to template")
+        return None
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, db: AsyncSession = Depends(get_db)):
     """Chat with AI about simulation results."""
@@ -176,5 +233,9 @@ async def chat(req: ChatRequest, db: AsyncSession = Depends(get_db)):
             session_id=req.session_id,
         )
 
-    resp = _generate_response(req.message, roi, irr, from_db)
+    # Try VLM first, fall back to template
+    resp = await _try_vlm_response(req.message, roi, irr, from_db)
+    if resp is None:
+        resp = _generate_response(req.message, roi, irr, from_db)
+
     return ChatResponse(response=resp, session_id=req.session_id)

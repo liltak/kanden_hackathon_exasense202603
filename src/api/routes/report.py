@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -14,6 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models import Simulation
 from ..schemas import ReportGenerateRequest, ReportResponse
+from ..vlm_bridge import get_pipeline, has_gpu, render_heatmap_png
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/report", tags=["report"])
 
@@ -41,6 +47,52 @@ def _try_upload_to_minio(task_id: str, report: str, json_data: list) -> bool:
         return True
     except Exception:
         return False
+
+
+async def _generate_ai_section(sim: dict) -> str | None:
+    """Generate AI image analysis section using VLM. Returns None if unavailable."""
+    if not has_gpu():
+        return None
+
+    pipeline = get_pipeline()
+    if pipeline is None:
+        return None
+
+    mesh = sim.get("mesh")
+    irr = sim.get("irradiance")
+    if mesh is None or irr is None:
+        logger.debug("AI section skipped: no mesh or irradiance data")
+        return None
+
+    try:
+        from PIL import Image
+
+        png_bytes = render_heatmap_png(mesh, irr)
+        heatmap_img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+
+        roi = sim.get("roi")
+        context = ""
+        if roi:
+            context = (
+                f"設置可能容量: {roi.total_capacity_kw:.1f}kW, "
+                f"年間発電量: {roi.total_annual_generation_kwh:,.0f}kWh, "
+                f"年間削減額: ¥{roi.total_annual_savings_jpy:,.0f}"
+            )
+
+        result = await asyncio.to_thread(
+            pipeline.analyze_panel_placement,
+            heatmap_image=heatmap_img,
+            context_data=context,
+        )
+        logger.info(
+            "AI section generated: %.1fs, %d tokens",
+            result.latency_seconds,
+            result.output_tokens,
+        )
+        return f"\n## 6. AI画像分析\n\n{result.text}\n"
+    except Exception:
+        logger.exception("AI section generation failed")
+        return None
 
 
 @router.post("/generate", response_model=ReportResponse)
@@ -201,6 +253,12 @@ async def generate_report(req: ReportGenerateRequest | None = None, db: AsyncSes
 *本レポートはExaSenseシミュレーションエンジンにより自動生成されました。*
 *実際の設置には専門家による現地調査と詳細設計が必要です。*
 """
+
+    # Append AI analysis section if GPU is available
+    if not from_db:
+        ai_section = await _generate_ai_section(sim)
+        if ai_section:
+            report += ai_section
 
     # Build JSON data
     if from_db:
