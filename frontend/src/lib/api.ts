@@ -145,12 +145,14 @@ export async function loadPreset(name: string): Promise<ReconstructionStatus> {
 export async function startReconstruction(
   files: File[],
   method: "vggt" | "colmap" = "vggt",
+  outputFormat: "mesh" | "glb" = "mesh",
 ): Promise<ReconstructionStatus> {
   const formData = new FormData();
   for (const file of files) {
     formData.append("files", file);
   }
   formData.append("method", method);
+  formData.append("output_format", outputFormat);
   const res = await fetch(`${API_BASE}/api/reconstruction/start`, {
     method: "POST",
     body: formData,

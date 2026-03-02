@@ -64,6 +64,7 @@ async def _run_reconstruction_api(
     task_id: str,
     image_files: list[tuple[str, bytes]],
     method: str,
+    output_format: str = "mesh",
 ) -> None:
     """Execute reconstruction pipeline via H100 HTTP API."""
     timeout = httpx.Timeout(600.0, connect=30.0)
@@ -84,7 +85,7 @@ async def _run_reconstruction_api(
                 "POST",
                 "/reconstruct",
                 files=multipart_files,
-                data={"method": method},
+                data={"method": method, "output_format": output_format},
             ) as response:
                 response.raise_for_status()
 
@@ -112,33 +113,45 @@ async def _run_reconstruction_api(
                     if step == "error":
                         raise RuntimeError(message)
 
-            # Step 2: Download mesh from H100
+            # Step 2: Download result from H100
             if h100_task_id is None:
                 raise RuntimeError("No task_id received from H100 stream")
 
-            _update_task(task_id, progress=0.90, step="download", message="メッシュをダウンロード中...")
-            await ws_manager.send_progress(task_id, "download", 0.90, "メッシュをダウンロード中...")
-
-            mesh_response = await client.get(f"/reconstruct/{h100_task_id}/mesh")
-            mesh_response.raise_for_status()
-            mesh_bytes = mesh_response.content
-
-            _update_task(task_id, progress=0.95, step="load", message="メッシュをロード中...")
-            await ws_manager.send_progress(task_id, "load", 0.95, "メッシュをロード中...")
-
-            # Step 3: Load mesh into trimesh and cache
-            import trimesh
-
-            mesh = trimesh.load(
-                io.BytesIO(mesh_bytes),
-                file_type="ply",
-                force="mesh",
-            )
             mesh_id = f"recon_{task_id}"
 
             from .mesh import _mesh_cache
 
-            _mesh_cache[mesh_id] = {"mesh": mesh, "filename": f"recon_{task_id}.ply"}
+            if output_format == "glb":
+                # GLB point cloud: download and cache raw bytes
+                _update_task(task_id, progress=0.90, step="download", message="GLBをダウンロード中...")
+                await ws_manager.send_progress(task_id, "download", 0.90, "GLBをダウンロード中...")
+
+                glb_response = await client.get(f"/reconstruct/{h100_task_id}/glb")
+                glb_response.raise_for_status()
+
+                _mesh_cache[mesh_id] = {
+                    "glb_bytes": glb_response.content,
+                    "filename": f"recon_{task_id}.glb",
+                }
+            else:
+                # Mesh PLY: download, load, and cache
+                _update_task(task_id, progress=0.90, step="download", message="メッシュをダウンロード中...")
+                await ws_manager.send_progress(task_id, "download", 0.90, "メッシュをダウンロード中...")
+
+                mesh_response = await client.get(f"/reconstruct/{h100_task_id}/mesh")
+                mesh_response.raise_for_status()
+
+                _update_task(task_id, progress=0.95, step="load", message="メッシュをロード中...")
+                await ws_manager.send_progress(task_id, "load", 0.95, "メッシュをロード中...")
+
+                import trimesh
+
+                mesh = trimesh.load(
+                    io.BytesIO(mesh_response.content),
+                    file_type="ply",
+                    force="mesh",
+                )
+                _mesh_cache[mesh_id] = {"mesh": mesh, "filename": f"recon_{task_id}.ply"}
 
             _update_task(
                 task_id,
@@ -300,17 +313,22 @@ async def load_preset(name: str = Form(...)):
 async def start_reconstruction(
     files: list[UploadFile] = File(...),
     method: str = Form("vggt"),
+    output_format: str = Form("mesh"),
 ):
     """Start 3D reconstruction from uploaded images.
 
     - **files**: Multiple image files (JPEG/PNG)
     - **method**: Reconstruction method — 'vggt' or 'colmap'
+    - **output_format**: 'mesh' (Poisson surface) or 'glb' (textured point cloud)
     """
     if not files:
         raise HTTPException(status_code=400, detail="No images provided")
 
     if method not in ("vggt", "colmap"):
         raise HTTPException(status_code=400, detail="method must be 'vggt' or 'colmap'")
+
+    if output_format not in ("mesh", "glb"):
+        raise HTTPException(status_code=400, detail="output_format must be 'mesh' or 'glb'")
 
     task_id = f"recon_{uuid.uuid4().hex[:8]}"
 
@@ -329,7 +347,7 @@ async def start_reconstruction(
         message="キューに追加されました",
     )
 
-    asyncio.create_task(_run_reconstruction_api(task_id, image_files, method))
+    asyncio.create_task(_run_reconstruction_api(task_id, image_files, method, output_format))
 
     return _tasks[task_id]
 

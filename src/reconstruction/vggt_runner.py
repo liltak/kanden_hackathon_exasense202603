@@ -196,7 +196,7 @@ def run_vggt(
     output_dir: Path,
     device: str = "cuda",
     max_images: int | None = None,
-    confidence_threshold: float = 0.5,
+    confidence_threshold: float = 3.0,
     dtype: str = "float16",
 ) -> VGGTResult:
     """Run VGGT inference on a directory of images.
@@ -206,7 +206,8 @@ def run_vggt(
         output_dir: Directory for output files (PLY, JSON, depth maps).
         device: Torch device string.
         max_images: Maximum number of images to process.
-        confidence_threshold: Minimum confidence for point cloud filtering.
+        confidence_threshold: Confidence percentile for filtering (0-100).
+            Points below this percentile are removed.
         dtype: Model dtype ("float16" or "float32").
 
     Returns:
@@ -214,6 +215,8 @@ def run_vggt(
     """
     import torch
     from PIL import Image
+    from vggt.utils.pose_enc import pose_encoding_to_extri_intri
+    from vggt.utils.geometry import unproject_depth_map_to_point_map
 
     image_dir = Path(image_dir)
     output_dir = Path(output_dir)
@@ -221,6 +224,9 @@ def run_vggt(
 
     torch_device = torch.device(device if torch.cuda.is_available() else "cpu")
     torch_dtype = torch.float16 if dtype == "float16" else torch.float32
+    # Use bfloat16 on Ampere+ GPUs (compute capability >= 8)
+    if torch_device.type == "cuda" and torch.cuda.get_device_capability()[0] >= 8:
+        torch_dtype = torch.bfloat16
 
     if torch_device.type == "cpu":
         console.print("[yellow]CUDA not available, running on CPU (will be slow)")
@@ -271,8 +277,15 @@ def run_vggt(
         images_tensor = load_and_preprocess_images([str(p) for p in image_paths])
         images_tensor = images_tensor.to(torch_device)
 
-        with torch.no_grad(), torch.autocast(device_type=torch_device.type, dtype=torch_dtype):
+        with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch_dtype):
             predictions = model(images_tensor)
+
+        # Convert pose encoding to extrinsic/intrinsic matrices (matching official demo)
+        extrinsic, intrinsic = pose_encoding_to_extri_intri(
+            predictions["pose_enc"], images_tensor.shape[-2:]
+        )
+        predictions["extrinsic"] = extrinsic
+        predictions["intrinsic"] = intrinsic
 
         timing.inference_s = time.perf_counter() - t0
         timing.peak_vram_gb = _get_peak_vram_gb()
@@ -286,34 +299,37 @@ def run_vggt(
         task = progress.add_task("Post-processing results...", total=None)
         t0 = time.perf_counter()
 
-        # Extract point cloud from predictions
-        # VGGT returns per-frame 3D points, we aggregate them
-        pred_world_points = predictions["world_points"].cpu().numpy()  # (1, N_frames, H, W, 3)
-        pred_world_points = pred_world_points[0]  # (N_frames, H, W, 3)
+        # Convert all tensors to numpy, remove batch dimension (matching official demo)
+        for key in list(predictions.keys()):
+            if isinstance(predictions[key], torch.Tensor):
+                predictions[key] = predictions[key].cpu().numpy().squeeze(0)
 
-        # Confidence maps
-        if "world_points_conf" in predictions:
-            pred_conf = predictions["world_points_conf"].cpu().numpy()[0]  # (N_frames, H, W)
-        else:
+        # Generate world points from depth maps (official demo's default mode)
+        # This produces much better 3D structure than the direct pointmap output
+        depth_map = predictions["depth"]  # (S, H, W, 1)
+        world_points_from_depth = unproject_depth_map_to_point_map(
+            depth_map, predictions["extrinsic"], predictions["intrinsic"]
+        )
+        pred_world_points = world_points_from_depth  # (S, H, W, 3)
+
+        # Use depth confidence for filtering (matches official demo's default)
+        pred_conf = predictions.get("depth_conf", predictions.get("world_points_conf"))
+        if pred_conf is None:
             pred_conf = np.ones(pred_world_points.shape[:3], dtype=np.float32)
 
-        # Depth maps from predictions
-        if "depth" in predictions:
-            raw_depths = predictions["depth"].cpu().numpy()[0]  # (N_frames, H, W)
-        else:
-            raw_depths = np.linalg.norm(pred_world_points, axis=-1)
+        # Depth maps
+        raw_depths = predictions["depth"]  # (S, H, W, 1)
+        if raw_depths.ndim == 4 and raw_depths.shape[-1] == 1:
+            raw_depths = raw_depths[..., 0]  # (S, H, W)
 
-        # Camera extrinsics
-        if "extrinsic" in predictions:
-            pred_extrinsics = predictions["extrinsic"].cpu().numpy()[0]  # (N_frames, 3, 4) or (N_frames, 4, 4)
-        else:
-            pred_extrinsics = [np.eye(4) for _ in range(len(image_names))]
+        # Camera extrinsics/intrinsics (now properly computed)
+        pred_extrinsics = predictions["extrinsic"]  # (S, 3, 4)
+        pred_intrinsics = predictions["intrinsic"]  # (S, 3, 3)
 
-        # Camera intrinsics
-        if "intrinsic" in predictions:
-            pred_intrinsics = predictions["intrinsic"].cpu().numpy()[0]
-        else:
-            pred_intrinsics = [None] * len(image_names)
+        # Percentile-based confidence filtering (matching official demo)
+        all_conf_flat = pred_conf.flatten()
+        conf_cutoff = np.percentile(all_conf_flat, confidence_threshold)
+        console.print(f"  Confidence: percentile={confidence_threshold}, cutoff={conf_cutoff:.4f}")
 
         # Collect per-image results
         all_points = []
@@ -327,7 +343,7 @@ def run_vggt(
             frame_conf = pred_conf[i]  # (H, W)
             frame_depth = raw_depths[i]  # (H, W)
 
-            mask = frame_conf > confidence_threshold
+            mask = (frame_conf >= conf_cutoff) & (frame_conf > 1e-5)
             valid_points = frame_points[mask]  # (M, 3)
 
             # Get colors from the original image, resized to match prediction resolution
@@ -341,11 +357,8 @@ def run_vggt(
             depth_maps.append(frame_depth)
             confidence_maps.append(frame_conf)
 
-            extrinsic = pred_extrinsics[i] if isinstance(pred_extrinsics, np.ndarray) else pred_extrinsics[i]
-            intrinsic = pred_intrinsics[i] if isinstance(pred_intrinsics, np.ndarray) else pred_intrinsics[i]
-
             camera_poses.append(
-                _camera_pose_to_dict(extrinsic, intrinsic, name, img.size)
+                _camera_pose_to_dict(pred_extrinsics[i], pred_intrinsics[i], name, img.size)
             )
 
         point_cloud = np.concatenate(all_points, axis=0)

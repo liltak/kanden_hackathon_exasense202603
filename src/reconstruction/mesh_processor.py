@@ -290,17 +290,32 @@ class MeshProcessor:
         points = np.asarray(self._pcd.points)
         n_before = len(points)
 
-        # Auto-compute voxel_size from point cloud extent if not specified
+        # Auto-compute voxel_size from point cloud spatial density
         if voxel_size is None:
             extent = points.max(axis=0) - points.min(axis=0)
-            volume = float(np.prod(extent))
-            if volume > 0 and n_before > target_points:
-                # voxel_size³ * target_points ≈ volume
-                voxel_size = (volume / target_points) ** (1.0 / 3.0)
+            if n_before > target_points:
+                # Sample a subset to estimate average nearest-neighbor distance
+                sample_n = min(10_000, n_before)
+                rng = np.random.default_rng(42)
+                sample_idx = rng.choice(n_before, sample_n, replace=False)
+                sample_pts = points[sample_idx]
+
+                # Use KDTree for fast NN lookup
+                from scipy.spatial import cKDTree
+                tree = cKDTree(sample_pts)
+                dists, _ = tree.query(sample_pts, k=2)  # k=2: self + nearest
+                avg_nn_dist = float(np.median(dists[:, 1]))
+
+                # Voxel size = multiple of NN distance to achieve target reduction
+                reduction_ratio = n_before / target_points
+                voxel_size = avg_nn_dist * (reduction_ratio ** (1.0 / 3.0))
+                # Clamp: at least 3x NN distance, at most 1% of extent
+                voxel_size = max(voxel_size, avg_nn_dist * 3.0)
+                voxel_size = min(voxel_size, float(extent.max()) * 0.01)
+                console.print(f"    Auto voxel_size: {voxel_size:.6f} (avg_nn: {avg_nn_dist:.6f}, extent: {extent.round(3)})")
             else:
-                # Very small cloud or already sparse — use tiny voxel (basically no-op)
                 voxel_size = float(extent.max()) * 0.001
-            console.print(f"    Auto voxel_size: {voxel_size:.6f} (extent: {extent.round(3)})")
+                console.print(f"    Auto voxel_size: {voxel_size:.6f} (sparse cloud, extent: {extent.round(3)})")
 
         # Auto-compute radius from voxel_size if not specified
         if radius is None:
@@ -439,7 +454,7 @@ class MeshProcessor:
                 search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30)
             )
             n_points = len(np.asarray(pcd.points))
-            if n_points > 50_000:
+            if n_points > 30_000:
                 # O(n) camera-based orientation for large point clouds
                 console.print(f"    Orient normals (camera-based, {n_points:,} points)...")
                 pcd.orient_normals_towards_camera_location(
@@ -1044,7 +1059,7 @@ def process_reconstruction(
     geo_ref: GeoReference | None = None,
     depth_dir: Path | None = None,
     camera_poses_path: Path | None = None,
-    poisson_depth: int = 9,
+    poisson_depth: int = 7,
     voxel_size: float | None = None,
     smooth_iterations: int = 10,
     target_faces: int = 50000,

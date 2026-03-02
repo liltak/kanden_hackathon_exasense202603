@@ -1,0 +1,72 @@
+{
+  "test_name": "h100_e2e_pipeline",
+  "timestamp": "2026-03-01T08:06:27.782880",
+  "gpu": {
+    "gpu_name": "NVIDIA H100 80GB HBM3",
+    "gpu_memory_gb": 79.6,
+    "driver_version": "570.195.03\nNVIDIA H100 80GB HBM3"
+  },
+  "params": {
+    "max_images": 20,
+    "confidence_threshold": 0.3,
+    "dtype": "float16",
+    "target_faces": 50000
+  },
+  "vggt": {
+    "timing": {
+      "model_load_s": 10.69,
+      "image_load_s": 1.35,
+      "inference_s": 4.02,
+      "postprocess_s": 1.03,
+      "save_s": 0.28,
+      "total_s": 17.37
+    },
+    "peak_vram_gb": 13.95,
+    "num_images": 30,
+    "num_points": 6091680,
+    "confidence_threshold": 0.3,
+    "device": "cuda",
+    "dtype": "float16",
+    "output_files": {
+      "point_cloud": "data/e2e_results/h100_south_building/vggt/point_cloud.ply",
+      "camera_poses": "data/e2e_results/h100_south_building/vggt/camera_poses.json",
+      "depth_maps": "data/e2e_results/h100_south_building/vggt/depth_maps"
+    }
+  },
+  "mesh": {
+    "n_vertices": 25403,
+    "n_faces": 50000,
+    "surface_area_m2": 14.53,
+    "n_roof_faces": 1293,
+    "n_wall_faces": 46753,
+    "n_ground_faces": 3,
+    "total_time_s": 197.82,
+    "timing_detail": {
+      "load_point_cloud": 1.097,
+      "preprocess_point_cloud": 0.749,
+      "extract_poisson": 191.555,
+      "clean_mesh": 0.371,
+      "smooth_mesh": 0.189,
+      "decimate_mesh": 0.612,
+      "detect_roof_planes": 0.219,
+      "fix_normals": 0.01,
+      "transform_coordinates": 0.001,
+      "segment_faces": 0.006,
+      "save": 0.008
+    },
+    "mesh_path": "data/e2e_results/h100_south_building/mesh/mesh.ply"
+  },
+  "solar": {
+    "n_mesh_faces": 50000,
+    "upward_faces": 1816,
+    "upward_area_m2": 3.24,
+    "total_capacity_kw": 0,
+    "annual_generation_kwh": 0,
+    "annual_savings_yen": 0,
+    "payback_years": Infinity,
+    "npv_25y_yen": 0,
+    "n_proposals": 0,
+    "total_time_s": 71.19
+  },
+  "total_pipeline_s": 269.34
+}

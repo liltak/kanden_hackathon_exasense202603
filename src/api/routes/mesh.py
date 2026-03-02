@@ -160,6 +160,10 @@ async def get_mesh_glb(mesh_id: str, db: AsyncSession = Depends(get_db)):
         else:
             raise HTTPException(status_code=404, detail="Mesh not in cache")
 
+    # Serve pre-built GLB bytes directly (e.g. point cloud from VGGT)
+    if "glb_bytes" in entry:
+        return Response(content=entry["glb_bytes"], media_type="model/gltf-binary")
+
     glb_bytes = _mesh_to_glb(entry["mesh"])
     return Response(content=glb_bytes, media_type="model/gltf-binary")
 

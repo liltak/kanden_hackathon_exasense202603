@@ -50,6 +50,21 @@ function useSolarMaterial(scene: THREE.Group, solarActive: boolean) {
   }, [scene, solarActive]);
 }
 
+/** Detect and style point clouds (GLTF mode=0 POINTS) in the loaded scene. */
+function usePointCloudMaterial(scene: THREE.Group, pointSize: number = 2.0) {
+  useEffect(() => {
+    scene.traverse((child) => {
+      if (child instanceof THREE.Points) {
+        child.material = new THREE.PointsMaterial({
+          size: pointSize,
+          vertexColors: true,
+          sizeAttenuation: true,
+        });
+      }
+    });
+  }, [scene, pointSize]);
+}
+
 function Model({
   url,
   sunDirection,
@@ -66,6 +81,7 @@ function Model({
   const { scene } = useGLTF(url);
   const groupRef = useRef<THREE.Group>(null);
 
+  usePointCloudMaterial(scene);
   useSolarMaterial(scene, !!solarActive);
 
   useEffect(() => {

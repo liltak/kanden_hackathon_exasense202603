@@ -1,0 +1,69 @@
+{
+  "test_name": "h100_e2e_pipeline",
+  "timestamp": "2026-03-01T05:35:36.588259",
+  "gpu": {
+    "gpu_name": "NVIDIA H100 80GB HBM3",
+    "gpu_memory_gb": 79.6,
+    "driver_version": "570.195.03\nNVIDIA H100 80GB HBM3"
+  },
+  "params": {
+    "max_images": 20,
+    "confidence_threshold": 0.3,
+    "dtype": "float16",
+    "target_faces": 20000
+  },
+  "vggt": {
+    "n_images": 20,
+    "n_points": 3480960,
+    "inference_time_s": 5.87,
+    "peak_vram_gb": 11.19,
+    "total_time_s": 35.41,
+    "timing_detail": {
+      "model_load_s": 11.55,
+      "image_load_s": 4.72,
+      "inference_s": 5.87,
+      "postprocess_s": 1.4,
+      "save_s": 9.85,
+      "total_s": 33.39
+    },
+    "point_cloud_path": "/home/team-002/kanden-hackathon/data/e2e_results/h100/vggt/point_cloud.ply",
+    "depth_dir": "/home/team-002/kanden-hackathon/data/e2e_results/h100/vggt/depth_maps",
+    "camera_poses_path": "/home/team-002/kanden-hackathon/data/e2e_results/h100/vggt/camera_poses.json"
+  },
+  "mesh": {
+    "n_vertices": 10194,
+    "n_faces": 20000,
+    "surface_area_m2": 38.18,
+    "n_roof_faces": 1493,
+    "n_wall_faces": 16524,
+    "n_ground_faces": 3,
+    "total_time_s": 318.55,
+    "timing_detail": {
+      "load_point_cloud": 1.59,
+      "preprocess_point_cloud": 0.337,
+      "extract_poisson": 313.706,
+      "clean_mesh": 0.114,
+      "smooth_mesh": 0.064,
+      "decimate_mesh": 0.207,
+      "detect_roof_planes": 0.04,
+      "fix_normals": 0.005,
+      "transform_coordinates": 0.001,
+      "segment_faces": 0.004,
+      "save": 0.004
+    },
+    "mesh_path": "/home/team-002/kanden-hackathon/data/e2e_results/h100/mesh/mesh.ply"
+  },
+  "solar": {
+    "n_mesh_faces": 20000,
+    "upward_faces": 2056,
+    "upward_area_m2": 9.19,
+    "total_capacity_kw": 0,
+    "annual_generation_kwh": 0,
+    "annual_savings_yen": 0,
+    "payback_years": Infinity,
+    "npv_25y_yen": 0,
+    "n_proposals": 0,
+    "total_time_s": 28.48
+  },
+  "total_pipeline_s": 382.67
+}
