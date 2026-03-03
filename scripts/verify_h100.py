@@ -82,14 +82,20 @@ def check_vggt_load() -> Check:
     t0 = time.time()
     try:
         import torch
-        from transformers import AutoModel
 
         torch.cuda.reset_peak_memory_stats()
         vram_before = torch.cuda.memory_allocated() / 1e9
 
-        model = AutoModel.from_pretrained(
-            "facebook/VGGT-1B-Commercial", trust_remote_code=True,
-        )
+        # Use VGGT's own loader (AutoModel may not recognize custom model_type)
+        try:
+            from vggt.models.vggt import VGGT
+            model = VGGT.from_pretrained("facebook/VGGT-1B-Commercial")
+        except ImportError:
+            from transformers import AutoModel
+            model = AutoModel.from_pretrained(
+                "facebook/VGGT-1B-Commercial", trust_remote_code=True,
+            )
+
         model = model.to("cuda")
 
         vram_model = torch.cuda.memory_allocated() / 1e9 - vram_before

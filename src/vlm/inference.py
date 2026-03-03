@@ -179,12 +179,14 @@ class VLMPipeline:
 
     def _load_image(self, img: str | Path | Image.Image) -> Image.Image:
         """Load image from path or return existing PIL Image."""
-        if isinstance(img, Image.Image):
+        from PIL import Image as _Image
+
+        if isinstance(img, _Image.Image):
             return img
         path = Path(img)
         if not path.exists():
             raise FileNotFoundError(f"Image not found: {path}")
-        return Image.open(path).convert("RGB")
+        return _Image.open(path).convert("RGB")
 
     def _build_prompt(self, request: InferenceRequest) -> str:
         """Build the full prompt from template and request data."""
@@ -265,6 +267,8 @@ class VLMPipeline:
         ).to(self.model.device)
 
         input_tokens = inputs["input_ids"].shape[1]
+
+        import torch
 
         with torch.no_grad():
             output_ids = self.model.generate(

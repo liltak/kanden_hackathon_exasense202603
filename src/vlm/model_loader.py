@@ -20,6 +20,15 @@ console = Console()
 MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
 
 
+def _default_attn_implementation() -> str:
+    """Select best available attention implementation."""
+    try:
+        import flash_attn  # noqa: F401
+        return "flash_attention_2"
+    except ImportError:
+        return "sdpa"
+
+
 @dataclass
 class ModelConfig:
     """Configuration for Qwen2.5-VL model loading."""
@@ -34,7 +43,7 @@ class ModelConfig:
     top_k: int = 50
     repetition_penalty: float = 1.05
     trust_remote_code: bool = True
-    attn_implementation: str = "flash_attention_2"
+    attn_implementation: str = field(default_factory=_default_attn_implementation)
     min_pixels: int = 256 * 28 * 28
     max_pixels: int = 1280 * 28 * 28
     extra_kwargs: dict = field(default_factory=dict)
