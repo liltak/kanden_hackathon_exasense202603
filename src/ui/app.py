@@ -9,6 +9,7 @@ Demo-ready dashboard interface with:
 """
 
 import json
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -771,7 +772,7 @@ def main():
     app = build_app()
     app.launch(
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=int(os.environ.get("GRADIO_SERVER_PORT", "7860")),
         share=False,
         theme=gr.themes.Default(
             primary_hue="blue",
