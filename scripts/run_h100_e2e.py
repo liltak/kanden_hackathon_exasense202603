@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""H100 E2E Pipeline Test — Phase 1 (VGGT) → Phase 2 (Mesh) → Phase 3 (Solar).
+"""H100 E2E Pipeline Test — Phase 1→2→3→4 (VGGT→Mesh→Solar→VLM).
 
-Runs the full reconstruction + simulation pipeline on H100 GPU,
+Runs the full reconstruction + simulation + VLM analysis pipeline on H100 GPU,
 benchmarks performance, and compares with T4 baseline results.
 
 Usage:
     uv run python scripts/run_h100_e2e.py [--image-dir DATA] [--max-images 20]
+    uv run python scripts/run_h100_e2e.py --skip-vlm          # Skip VLM (Phase 4)
+    uv run python scripts/run_h100_e2e.py --expected-extent 50 # 50m building
 """
 
 from __future__ import annotations
@@ -141,10 +143,50 @@ def run_vggt_phase(
     }
 
 
+def estimate_scale_factor(
+    point_cloud_path: Path,
+    expected_extent_m: float = 30.0,
+) -> float:
+    """Estimate scale factor from point cloud bounding box.
+
+    VGGT outputs coordinates in normalized/arbitrary space.
+    We estimate the real-world scale by comparing the point cloud
+    extent to an expected building footprint size.
+
+    Args:
+        point_cloud_path: Path to the point cloud PLY file.
+        expected_extent_m: Expected real-world extent in meters
+            (default 30m, typical factory building).
+
+    Returns:
+        Scale factor to convert local units to meters.
+    """
+    import open3d as o3d
+
+    pcd = o3d.io.read_point_cloud(str(point_cloud_path))
+    points = np.asarray(pcd.points)
+
+    bbox_min = points.min(axis=0)
+    bbox_max = points.max(axis=0)
+    extents = bbox_max - bbox_min
+    max_extent = float(extents.max())
+
+    if max_extent < 1e-6:
+        console.print("[yellow]  Warning: point cloud has near-zero extent")
+        return 1.0
+
+    scale = expected_extent_m / max_extent
+    console.print(f"  Point cloud extent: {extents}")
+    console.print(f"  Max extent: {max_extent:.4f} (local units)")
+    console.print(f"  Expected: {expected_extent_m}m → scale_factor = {scale:.2f}")
+    return round(scale, 2)
+
+
 def run_mesh_phase(
     point_cloud_path: Path,
     output_dir: Path,
     target_faces: int,
+    expected_extent_m: float = 30.0,
 ) -> dict:
     """Phase 2: Run mesh processing pipeline."""
     from src.reconstruction.mesh_processor import GeoReference, process_reconstruction
@@ -153,11 +195,15 @@ def run_mesh_phase(
     console.print(f"  Point cloud: {point_cloud_path}")
     console.print(f"  Target faces: {target_faces}")
 
-    # Osaka geo-reference
+    # Auto-estimate scale factor from point cloud bounding box
+    scale_factor = estimate_scale_factor(point_cloud_path, expected_extent_m)
+
+    # Osaka geo-reference with auto-estimated scale
     geo_ref = GeoReference(
         latitude=34.69,
         longitude=135.50,
         altitude=10.0,
+        scale_factor=scale_factor,
     )
 
     mesh_output = output_dir / "mesh.ply"
@@ -182,6 +228,7 @@ def run_mesh_phase(
         "total_time_s": round(elapsed, 2),
         "timing_detail": {k: round(v, 3) for k, v in result.timing_s.items()},
         "mesh_path": str(mesh_output),
+        "scale_factor": scale_factor,
     }
 
 
@@ -328,9 +375,114 @@ def print_comparison_table(h100_results: dict):
     console.print(table)
 
 
+def run_vlm_phase(
+    mesh_path: Path,
+    solar_output_dir: Path,
+    output_dir: Path,
+) -> dict:
+    """Phase 4: Run VLM analysis on solar simulation results."""
+    import torch
+    from PIL import Image
+
+    from src.vlm.inference import InferenceRequest, VLMPipeline
+
+    console.print("\n[bold blue]═══ Phase 4: VLM Analysis (Qwen2.5-VL) ═══")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Collect input images for VLM
+    images: list[Image.Image] = []
+    image_paths: list[str] = []
+
+    # Look for heatmap from solar simulation
+    heatmap_candidates = [
+        solar_output_dir / "irradiance_heatmap.png",
+        solar_output_dir / "heatmap.png",
+        solar_output_dir / "solar_heatmap.png",
+    ]
+    for candidate in heatmap_candidates:
+        if candidate.exists():
+            images.append(Image.open(candidate).convert("RGB"))
+            image_paths.append(str(candidate))
+            console.print(f"  Heatmap: {candidate}")
+            break
+
+    # If no heatmap available, create a placeholder test image
+    if not images:
+        console.print("  [yellow]No heatmap found, creating test image")
+        test_img = Image.new("RGB", (640, 480), color=(100, 150, 200))
+        images.append(test_img)
+        image_paths.append("synthetic_test_image")
+
+    # Load VLM pipeline
+    torch.cuda.reset_peak_memory_stats()
+    vram_before = torch.cuda.memory_allocated() / 1e9
+
+    t0 = time.perf_counter()
+    pipeline = VLMPipeline()
+    pipeline.load()
+    load_time = time.perf_counter() - t0
+
+    vram_after_load = torch.cuda.memory_allocated() / 1e9
+    console.print(f"  Model loaded in {load_time:.1f}s")
+    console.print(f"  VRAM for model: {vram_after_load - vram_before:.1f} GB")
+
+    # Run inference
+    context_data = json.dumps({
+        "location": "Osaka, Japan (34.69°N, 135.50°E)",
+        "building_type": "Industrial factory",
+        "note": "E2E pipeline test",
+    }, ensure_ascii=False)
+
+    request = InferenceRequest(
+        images=images,
+        prompt_template="panel_placement",
+        context_data=context_data,
+        max_new_tokens=1024,
+        temperature=0.7,
+    )
+
+    t1 = time.perf_counter()
+    result = pipeline.infer(request)
+    infer_time = time.perf_counter() - t1
+
+    peak_vram = torch.cuda.max_memory_allocated() / 1e9
+
+    console.print(f"  Inference: {infer_time:.1f}s")
+    console.print(f"  Output tokens: {result.output_tokens}")
+    console.print(f"  Peak VRAM: {peak_vram:.1f} GB")
+    console.print(f"  Throughput: {result.output_tokens / infer_time:.0f} tok/s")
+
+    # Save VLM output
+    report_path = output_dir / "vlm_report.md"
+    report_path.write_text(result.text, encoding="utf-8")
+    console.print(f"  Report saved: {report_path}")
+
+    # Preview first 200 chars
+    preview = result.text[:200].replace("\n", " ")
+    console.print(f"  Preview: {preview}...")
+
+    # Cleanup to free VRAM for potential further use
+    del pipeline
+    torch.cuda.empty_cache()
+
+    return {
+        "model_id": result.model_id,
+        "load_time_s": round(load_time, 2),
+        "inference_time_s": round(infer_time, 2),
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
+        "throughput_tok_s": round(result.output_tokens / infer_time, 1),
+        "vram_model_gb": round(vram_after_load - vram_before, 2),
+        "vram_peak_gb": round(peak_vram, 2),
+        "n_images": result.images_count,
+        "report_path": str(report_path),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="H100 E2E Pipeline Test: VGGT → Mesh → Solar Simulation"
+        description="H100 E2E Pipeline Test: VGGT → Mesh → Solar → VLM"
     )
     parser.add_argument(
         "--image-dir",
@@ -363,6 +515,12 @@ def main():
         help="Target mesh faces after decimation (default: 20000)",
     )
     parser.add_argument(
+        "--expected-extent",
+        type=float,
+        default=30.0,
+        help="Expected real-world extent in meters for scale estimation (default: 30m)",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=PROJECT_ROOT / "data" / "e2e_results" / "h100",
@@ -378,10 +536,16 @@ def main():
         action="store_true",
         help="Skip mesh processing (use existing mesh from output-dir)",
     )
+    parser.add_argument(
+        "--skip-vlm",
+        action="store_true",
+        help="Skip VLM analysis (Phase 4)",
+    )
     args = parser.parse_args()
 
     console.print("[bold magenta]" + "=" * 60)
     console.print("[bold magenta]  ExaSense H100 E2E Pipeline Test")
+    console.print("[bold magenta]  Phase 1→2→3→4 Full Pipeline")
     console.print("[bold magenta]" + "=" * 60)
 
     # System info
@@ -398,6 +562,7 @@ def main():
     vggt_output = args.output_dir / "vggt"
     mesh_output = args.output_dir / "mesh"
     solar_output = args.output_dir / "solar"
+    vlm_output = args.output_dir / "vlm"
 
     pipeline_t0 = time.perf_counter()
     results = {
@@ -409,6 +574,7 @@ def main():
             "confidence_threshold": args.confidence_threshold,
             "dtype": args.dtype,
             "target_faces": args.target_faces,
+            "expected_extent_m": args.expected_extent,
         },
     }
 
@@ -441,6 +607,7 @@ def main():
             point_cloud_path=point_cloud_path,
             output_dir=mesh_output,
             target_faces=args.target_faces,
+            expected_extent_m=args.expected_extent,
         )
         results["mesh"] = mesh_results
         mesh_path = Path(mesh_results["mesh_path"])
@@ -462,24 +629,54 @@ def main():
     )
     results["solar"] = solar_results
 
+    # --- Phase 4: VLM Analysis ---
+    if not args.skip_vlm:
+        try:
+            vlm_results = run_vlm_phase(
+                mesh_path=mesh_path,
+                solar_output_dir=solar_output,
+                output_dir=vlm_output,
+            )
+            results["vlm"] = vlm_results
+        except Exception as e:
+            console.print(f"\n[red]Phase 4 VLM failed: {e}")
+            results["vlm"] = {"error": str(e)}
+    else:
+        console.print("\n[yellow]Skipping VLM (--skip-vlm)")
+
     # --- Summary ---
     pipeline_total = time.perf_counter() - pipeline_t0
     results["total_pipeline_s"] = round(pipeline_total, 2)
 
     # Save results
     results_path = args.output_dir / "h100_e2e_results.json"
-    results_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
+    results_path.write_text(json.dumps(results, indent=2, ensure_ascii=False, default=str))
     console.print(f"\n[green]Results saved: {results_path}")
 
     # Print comparison
     print_comparison_table(results)
 
+    # VLM summary
+    vlm = results.get("vlm", {})
+    if vlm and "error" not in vlm:
+        console.print(f"\n[bold]VLM Analysis:")
+        console.print(f"  Model: {vlm.get('model_id', '?')}")
+        console.print(f"  Load: {vlm.get('load_time_s', 0):.1f}s")
+        console.print(f"  Inference: {vlm.get('inference_time_s', 0):.1f}s")
+        console.print(f"  Throughput: {vlm.get('throughput_tok_s', 0):.0f} tok/s")
+        console.print(f"  VRAM peak: {vlm.get('vram_peak_gb', 0):.1f} GB")
+
     # Summary banner
     console.print("\n[bold green]" + "=" * 60)
     console.print(f"[bold green]  Pipeline complete in {pipeline_total:.1f}s")
-    console.print(f"[bold green]  T4 baseline: {T4_BASELINE['total_s']:.1f}s")
-    if pipeline_total > 0:
-        console.print(f"[bold green]  Speedup: {T4_BASELINE['total_s'] / pipeline_total:.1f}x")
+    console.print(f"[bold green]  T4 baseline: {T4_BASELINE['total_s']:.1f}s (Phase 1-3 only)")
+    phases_13_total = (
+        results.get("vggt", {}).get("total_time_s", 0)
+        + results.get("mesh", {}).get("total_time_s", 0)
+        + results.get("solar", {}).get("total_time_s", 0)
+    )
+    if phases_13_total > 0:
+        console.print(f"[bold green]  Phase 1-3 speedup: {T4_BASELINE['total_s'] / phases_13_total:.1f}x")
     console.print("[bold green]" + "=" * 60)
 
     # Output files listing
