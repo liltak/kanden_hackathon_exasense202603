@@ -17,6 +17,7 @@ build/
 *.ckpt
 *.safetensors
 data/.cache/
+data/waypoint_results/
 wandb/
 
 # Node.js
