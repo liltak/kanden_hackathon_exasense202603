@@ -11,8 +11,7 @@ dependencies = [
     "pandas>=2.1.0",
     "plotly>=5.18.0",
     "scipy>=1.12.0",
-    # Phase 5: WebUI
-    "gradio>=5.0.0",
+    # Phase 5: FastAPI backend
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
     "python-multipart>=0.0.7",
