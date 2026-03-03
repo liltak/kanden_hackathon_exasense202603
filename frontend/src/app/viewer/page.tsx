@@ -197,30 +197,60 @@ export default function ViewerPage() {
                   <Button variant="outline" className="w-full text-xs" onClick={() => loadDemo("complex")}>
                     工場コンプレックス（4棟）
                   </Button>
-                  <Button
-                    variant="outline"
-                    className="w-full border-blue-300 text-xs text-blue-700 hover:bg-blue-50"
-                    onClick={() => {
-                      setActiveMeshType("complex");
-                      setMeshUrl("/south_building.glb");
-                      setMeshInfo({ mesh_id: "south_building", num_vertices: 9130, num_faces: 19999, surface_area_m2: 24.31, bounds_min: [-1.1, -0.8, -1.4], bounds_max: [1.1, 0.7, 1.4], download_url: "/south_building.glb" });
-                      setHeatmapMonth(null);
-                    }}
-                  >
-                    South Building（実データ 128枚）
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="w-full border-amber-300 text-xs text-amber-700 hover:bg-amber-50"
-                    onClick={() => {
-                      setActiveMeshType("complex");
-                      setMeshUrl("/colosseum.glb");
-                      setMeshInfo({ mesh_id: "colosseum", num_vertices: 10233, num_faces: 19999, surface_area_m2: 4.04, bounds_min: [-1.4, -0.5, -1.0], bounds_max: [1.4, 0.5, 1.1], download_url: "/colosseum.glb" });
-                      setHeatmapMonth(null);
-                    }}
-                  >
-                    コロッセオ（動画30フレーム）
-                  </Button>
+                  <p className="text-[11px] font-medium text-gray-500 pt-1">South Building (128枚)</p>
+                  <div className="flex gap-1">
+                    <Button
+                      variant="outline"
+                      className="flex-1 border-blue-300 text-[10px] text-blue-700 hover:bg-blue-50"
+                      onClick={() => {
+                        setActiveMeshType("complex");
+                        setMeshUrl("/south_building_pointcloud.glb");
+                        setMeshInfo(null);
+                        setHeatmapMonth(null);
+                      }}
+                    >
+                      点群
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="flex-1 border-blue-300 text-[10px] text-blue-700 hover:bg-blue-50"
+                      onClick={() => {
+                        setActiveMeshType("complex");
+                        setMeshUrl("/south_building.glb");
+                        setMeshInfo({ mesh_id: "south_building", num_vertices: 9130, num_faces: 19999, surface_area_m2: 24.31, bounds_min: [-1.1, -0.8, -1.4], bounds_max: [1.1, 0.7, 1.4], download_url: "/south_building.glb" });
+                        setHeatmapMonth(null);
+                      }}
+                    >
+                      メッシュ
+                    </Button>
+                  </div>
+                  <p className="text-[11px] font-medium text-gray-500 pt-1">コロッセオ (30フレーム)</p>
+                  <div className="flex gap-1">
+                    <Button
+                      variant="outline"
+                      className="flex-1 border-amber-300 text-[10px] text-amber-700 hover:bg-amber-50"
+                      onClick={() => {
+                        setActiveMeshType("complex");
+                        setMeshUrl("/colosseum_pointcloud.glb");
+                        setMeshInfo(null);
+                        setHeatmapMonth(null);
+                      }}
+                    >
+                      点群
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="flex-1 border-amber-300 text-[10px] text-amber-700 hover:bg-amber-50"
+                      onClick={() => {
+                        setActiveMeshType("complex");
+                        setMeshUrl("/colosseum_poisson9.glb");
+                        setMeshInfo({ mesh_id: "colosseum", num_vertices: 25000, num_faces: 50000, surface_area_m2: 4.04, bounds_min: [-1.4, -0.5, -1.0], bounds_max: [1.4, 0.5, 1.1], download_url: "/colosseum_poisson9.glb" });
+                        setHeatmapMonth(null);
+                      }}
+                    >
+                      メッシュ
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
 
