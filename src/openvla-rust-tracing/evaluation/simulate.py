@@ -1,6 +1,15 @@
 """
 タスク4: 推論 + 評価シミュレーション
 
+【実行環境】
+  --model_path なし (MockRustAgent): Mac ローカルで動作
+    依存: opencv-python, numpy のみ
+    → パイプライン全体の動作確認・可視化デバッグに使用
+
+  --model_path あり (OpenVLARustAgent): H100 推奨
+    依存: torch, transformers, peft が追加で必要
+    → H100 で学習したチェックポイントを使って本評価を実行
+
 学習に使っていない新規の特大画像を入力し、エージェントが
 自律的にサビ線を辿れるかを評価する。
 
@@ -10,6 +19,10 @@
   - 探索経路の可視化 (画像上に軌跡を描画して保存)
 
 使用方法:
+  # Mac ローカル (モックエージェント)
+  python simulate.py --output_dir results/simulation --n_test_images 3
+
+  # H100 (学習済みモデルで評価)
   python simulate.py \
     --model_path checkpoints/rust_openvla/best \
     --input_image path/to/test_image.png \

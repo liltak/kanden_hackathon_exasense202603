@@ -1,6 +1,11 @@
 """
 タスク2: RLDS/TFRecord 変換スクリプト
 
+【実行環境】Mac ローカル / H100 どちらでも動作
+  依存: opencv-python, numpy, tensorflow
+  - Mac (Apple Silicon):  pip install tensorflow-macos tensorflow-metal opencv-python
+  - Linux / H100:         pip install tensorflow opencv-python
+
 generate_dataset.py の出力を OpenVLA が読める
 RLDS 互換の TFRecord 形式に変換する。
 
@@ -35,14 +40,16 @@ from typing import Any, Iterator
 import cv2
 import numpy as np
 
-# TensorFlow は GPU 環境でのみ利用可能。
-# macOS (CPU 環境) でもインポートエラーが起きないようにする。
+# TensorFlow: Mac では tensorflow-macos, Linux/H100 では tensorflow を使用。
+# どちらも pip でインストール可能。未インストールでも import エラーにならないようにする。
 try:
     import tensorflow as tf
     TF_AVAILABLE = True
 except ImportError:
     TF_AVAILABLE = False
-    print("[WARNING] TensorFlow が見つかりません。テストモード以外では必要です。")
+    print("[WARNING] TensorFlow が見つかりません。")
+    print("  Mac:   pip install tensorflow-macos tensorflow-metal")
+    print("  H100:  pip install tensorflow")
 
 
 # ─── 定数 ─────────────────────────────────────────────────────────────────

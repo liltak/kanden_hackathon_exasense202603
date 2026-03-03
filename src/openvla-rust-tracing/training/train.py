@@ -1,7 +1,13 @@
 """
 タスク3: OpenVLA 7B LoRA ファインチューニングスクリプト
 
-H100 での実行を前提とした bf16 LoRA ファインチューニング。
+【実行環境】H100 専用 (Mac では実行不可)
+  理由: OpenVLA 7B は bf16 で約 14GB VRAM が必要。
+        Mac の MPS では速度・メモリ両面で非現実的。
+
+  依存 (H100 側でインストール):
+    pip install torch transformers peft accelerate wandb trl
+    pip install tensorflow  # TFRecord 読み込み用
 
 特徴:
   - 直近 3〜5 フレームの画像履歴を instruction に埋め込んでバックトラック判断を補助
@@ -9,7 +15,7 @@ H100 での実行を前提とした bf16 LoRA ファインチューニング。
   - WandB でのロギング
   - RLDS 形式の TFRecord を直接読み込み
 
-使用方法:
+使用方法 (H100 上で実行):
   torchrun --nproc_per_node=1 train.py \
     --data_dir data/rust_rlds \
     --output_dir checkpoints/rust_openvla \
@@ -17,10 +23,6 @@ H100 での実行を前提とした bf16 LoRA ファインチューニング。
     --lora_rank 16 \
     --bf16 \
     --wandb_project rust_openvla
-
-依存:
-  pip install transformers peft accelerate wandb trl
-  (TFRecord 読み込みのため tensorflow も必要)
 """
 
 from __future__ import annotations
@@ -34,14 +36,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+import cv2
 import numpy as np
-import torch
-from torch.utils.data import DataLoader, Dataset
 
-# 遅延インポート: GPU 環境でのみ利用可能
+# torch / transformers / peft は H100 環境でのみ利用可能。
+# Mac でこのファイルを import してもクラッシュしないよう try/except で保護する。
+try:
+    import torch
+    from torch.utils.data import DataLoader, Dataset
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import torch
+    from torch.utils.data import DataLoader, Dataset
     from transformers import AutoProcessor, AutoModelForVision2Seq
     from peft import LoraConfig, get_peft_model, TaskType
 
@@ -90,12 +101,10 @@ def build_minimap(
         minimap[cr, cc] = [200, 0, 0]       # 青 (BGR)
 
     # リサイズ (nearest interpolation で格子感を維持)
-    minimap_resized = torch.nn.functional.interpolate(
-        torch.from_numpy(minimap).permute(2, 0, 1).unsqueeze(0).float(),
-        size=(minimap_size, minimap_size),
-        mode="nearest",
-    ).squeeze(0).permute(1, 2, 0).byte().numpy()
-
+    # cv2 を使用することで Mac / H100 どちらでも動作する
+    minimap_resized = cv2.resize(
+        minimap, (minimap_size, minimap_size), interpolation=cv2.INTER_NEAREST
+    )
     return minimap_resized
 
 

@@ -1,6 +1,10 @@
 """
 タスク1: サビ線合成 + 探索ログ生成スクリプト
 
+【実行環境】Mac ローカル / H100 どちらでも動作
+  依存: opencv-python, numpy のみ (GPU 不要)
+  pip install opencv-python numpy
+
 リアルテクスチャ画像上にOpenCVでサビ線を合成し、
 連結成分ベースのDFS探索によって各ステップを記録する。
 
