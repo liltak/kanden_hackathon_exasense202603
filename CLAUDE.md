@@ -19,6 +19,10 @@ cd frontend && npm run dev              # Launch Next.js frontend (port 3000)
 scripts/setup_h100.sh                   # Full H100 GPU setup
 ```
 
+## H100 GPU Server
+- **接続**: `ssh h100`
+- GPU処理（3D再構成、VLM、Waypoint等）はH100で実行する
+
 ## Module Structure
 - `src/simulation/` — Solar simulation (Phase 3) - pvlib, trimesh, plotly
 - `src/reconstruction/` — 3D recon (Phase 1-2) - VGGT, COLMAP, OpenSplat, mesh processing
