@@ -435,11 +435,11 @@ def _record_step(
         instruction=instruction,
         action_name=action_name,
         action_vector=action_vec,
-        grid_row=to_r,
-        grid_col=to_c,
+        grid_row=int(to_r),
+        grid_col=int(to_c),
         is_rust=(action_name != "backtrack"),
         is_backtrack=is_backtrack,
-        component_id=component_id,
+        component_id=int(component_id),
     )
 
 

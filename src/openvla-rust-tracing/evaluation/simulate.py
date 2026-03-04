@@ -300,12 +300,14 @@ class OpenVLARustAgent:
             base_model_id,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
+            device_map="auto",
+            low_cpu_mem_usage=True,
         )
         self.model = PeftModel.from_pretrained(base_model, model_path)
-        self.model = self.model.to(device).eval()
+        self.model.eval()
+        # device_map="auto" 使用時は .to(device) 不要
         print("[OpenVLARustAgent] モデル読み込み完了")
 
-    @torch.no_grad()
     def predict_action(self, image: np.ndarray, instruction: str) -> str:
         """
         画像と instruction からアクション名を予測する。
@@ -314,18 +316,22 @@ class OpenVLARustAgent:
         logit から近似的にアクションベクトルを取得する。
         """
         import torch
+        from PIL import Image as PILImage
 
+        pil_image = PILImage.fromarray(image)
         inputs = self.processor(
             text=instruction,
-            images=image,
+            images=pil_image,
             return_tensors="pt",
-        ).to(self.device)
+        ).to(self.model.device)
+        inputs["pixel_values"] = inputs["pixel_values"].to(torch.bfloat16)
 
-        outputs = self.model.generate(
-            **inputs,
-            max_new_tokens=10,
-            do_sample=False,
-        )
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=32,
+                do_sample=False,
+            )
 
         # 生成されたトークンをデコードしてアクションを解析
         generated = self.processor.decode(
@@ -335,13 +341,21 @@ class OpenVLARustAgent:
 
         # OpenVLA のアクション出力フォーマットを解析
         # 例: "0.5 -0.3 0.0 0.0 0.0 0.0 0.0"
+        print(f"[predict_action] generated: {repr(generated)}")
         try:
             values = [float(v) for v in generated.strip().split()[:ACTION_DIM]]
+            if len(values) == 0:
+                raise ValueError("empty output")
             action_array = np.array(values + [0.0] * (ACTION_DIM - len(values)), dtype=np.float32)
-            return discretize_action(action_array)
+            action = discretize_action(action_array)
+            print(f"[predict_action] action: {action}")
+            return action
         except (ValueError, IndexError):
-            # パースに失敗した場合は "up" にフォールバック
-            return "up"
+            # パースに失敗した場合はランダムなアクションにフォールバック
+            import random
+            action = random.choice(list(ACTIONS.keys()))
+            print(f"[predict_action] parse failed → random: {action}")
+            return action
 
 
 class MockRustAgent:
@@ -461,6 +475,37 @@ def visualize_trajectory(
     print(f"[visualize] 可視化画像を保存しました: {output_path}")
 
 
+def _draw_frame(
+    image: np.ndarray,
+    env: "RustTracingEnv",
+    trajectory: list,
+    action_history: list,
+    output_path: Path,
+) -> None:
+    """シミュレーション中間フレームを保存する (visualize_trajectory の薄いラッパー)。"""
+    visualize_trajectory(image, env, trajectory, action_history, output_path)
+
+
+def frames_to_video(frame_dir: Path, output_path: Path, fps: int = 10) -> None:
+    """frame_dir 内の frame_XXXX.png を連結して mp4 を生成する。"""
+    frames = sorted(frame_dir.glob("frame_*.png"))
+    if not frames:
+        print("[video] フレームが見つかりません")
+        return
+    first = cv2.imread(str(frames[0]))
+    h, w = first.shape[:2]
+    writer = cv2.VideoWriter(
+        str(output_path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (w, h),
+    )
+    for f in frames:
+        writer.write(cv2.imread(str(f)))
+    writer.release()
+    print(f"[video] 動画を保存しました: {output_path}  ({len(frames)} frames, {fps} fps)")
+
+
 # ─── シミュレーション ─────────────────────────────────────────────────────
 def run_simulation(
     env: RustTracingEnv,
@@ -468,6 +513,8 @@ def run_simulation(
     max_steps: int = 500,
     max_backtracks: int = 100,
     coverage_threshold: float = 0.95,
+    frame_dir: Optional[Path] = None,
+    image_orig: Optional[np.ndarray] = None,
 ) -> SimulationResult:
     """
     エージェントによるシミュレーションを実行する。
@@ -477,6 +524,9 @@ def run_simulation(
       2. カバレッジが coverage_threshold を超えた
       3. max_backtracks を超えた
 
+    frame_dir が指定された場合、各ステップの中間フレームを PNG として保存する。
+    image_orig は frame_dir 使用時に必須 (元画像)。
+
     Returns:
         SimulationResult
     """
@@ -484,6 +534,9 @@ def run_simulation(
     n_backtracks = 0
     n_component_jumps = 0
     action_history: list[str] = []
+
+    if frame_dir is not None:
+        frame_dir.mkdir(parents=True, exist_ok=True)
 
     for step in range(max_steps):
         obs = env.get_observation()
@@ -495,6 +548,11 @@ def run_simulation(
             n_backtracks += 1
 
         _, info = env.step(action_name)
+
+        # 中間フレームを保存
+        if frame_dir is not None and image_orig is not None:
+            frame_path = frame_dir / f"frame_{step:04d}.png"
+            _draw_frame(image_orig, env, list(env.trajectory), list(action_history), frame_path)
 
         # カバレッジチェック
         stats = env.coverage_stats()
@@ -578,6 +636,10 @@ def main() -> None:
                         help="自動生成テスト画像の枚数 (--input_image 未指定時)")
     parser.add_argument("--seed", type=int, default=999)
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--save_video", action="store_true",
+                        help="各ステップのフレームを保存して mp4 動画を生成する")
+    parser.add_argument("--fps", type=int, default=8,
+                        help="動画のフレームレート (--save_video 時)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -633,12 +695,15 @@ def main() -> None:
             print("[simulate] モックエージェントを使用します (モデルパス未指定)")
             agent = MockRustAgent(env)
 
+        frame_dir = output_dir / f"{case_name}_frames" if args.save_video else None
         result = run_simulation(
             env=env,
             agent=agent,
             max_steps=args.max_steps,
             max_backtracks=args.max_backtracks,
             coverage_threshold=args.coverage_threshold,
+            frame_dir=frame_dir,
+            image_orig=img,
         )
 
         # 結果の表示
@@ -659,6 +724,11 @@ def main() -> None:
             action_history=env.history,
             output_path=vis_path,
         )
+
+        # 動画生成
+        if args.save_video and frame_dir and frame_dir.exists():
+            video_path = output_dir / f"{case_name}_trajectory.mp4"
+            frames_to_video(frame_dir, video_path, fps=args.fps)
 
         # ソース画像も保存
         cv2.imwrite(str(output_dir / f"{case_name}_source.png"), img)

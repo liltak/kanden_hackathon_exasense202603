@@ -237,17 +237,35 @@ class RLDSRustDataset(Dataset):
         action = record["action"].astype(np.float32)
 
         if self.processor is not None:
-            # OpenVLA の processor で前処理
-            inputs = self.processor(
-                text=instruction,
-                images=image,
+            # OpenVLA の processor で前処理 (numpy → PIL Image に変換)
+            from PIL import Image as PILImage
+            pil_image = PILImage.fromarray(image)
+
+            # アクション値を文字列化 ("0.5000 -0.3000 0.0000 ...")
+            action_str = " ".join([f"{v:.4f}" for v in action])
+            full_text = instruction + " " + action_str
+
+            # instruction のトークン長をテキストのみで計測（画像処理を省略してメモリ節約）
+            instr_len = self.processor.tokenizer(
+                instruction, return_tensors="pt"
+            )["input_ids"].shape[1]
+
+            # instruction + action_str を画像付きでトークナイズ（1回のみ）
+            inputs_full = self.processor(
+                text=full_text,
+                images=pil_image,
                 return_tensors="pt",
             )
+
+            # labels: instruction 部分は -100（損失計算しない）、action 部分のみ有効
+            labels = inputs_full["input_ids"].clone()
+            labels[:, :instr_len] = -100
+
             return {
-                "input_ids": inputs["input_ids"].squeeze(0),
-                "attention_mask": inputs["attention_mask"].squeeze(0),
-                "pixel_values": inputs["pixel_values"].squeeze(0),
-                "labels": torch.tensor(action, dtype=torch.float32),
+                "input_ids": inputs_full["input_ids"].squeeze(0),
+                "attention_mask": inputs_full["attention_mask"].squeeze(0),
+                "pixel_values": inputs_full["pixel_values"].squeeze(0),
+                "labels": labels.squeeze(0),
                 "is_first": record["is_first"],
                 "is_last": record["is_last"],
             }
@@ -333,6 +351,9 @@ def train(args: argparse.Namespace) -> None:
         args.model_name_or_path,
         torch_dtype=torch.bfloat16 if args.bf16 else torch.float32,
         trust_remote_code=True,
+        device_map="auto",
+        low_cpu_mem_usage=True,
+        max_memory={0: "75GiB"},  # CUDA_VISIBLE_DEVICES=1 により GPU1 が device:0 になる
     )
 
     # LoRA 適用
@@ -343,6 +364,10 @@ def train(args: argparse.Namespace) -> None:
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
+
+    # 活性化メモリ削減（gradient checkpointing）
+    model.enable_input_require_grads()
+    model.gradient_checkpointing_enable()
 
     # データセット
     train_dataset = RLDSRustDataset(
@@ -358,19 +383,46 @@ def train(args: argparse.Namespace) -> None:
         processor=processor,
     )
 
+    def collate_fn(batch):
+        from torch.nn.utils.rnn import pad_sequence
+        input_ids = pad_sequence(
+            [b["input_ids"] for b in batch],
+            batch_first=True,
+            padding_value=processor.tokenizer.pad_token_id,
+        )
+        attention_mask = pad_sequence(
+            [b["attention_mask"] for b in batch],
+            batch_first=True,
+            padding_value=0,
+        )
+        pixel_values = torch.stack([b["pixel_values"] for b in batch])
+        labels = pad_sequence(
+            [b["labels"] for b in batch],
+            batch_first=True,
+            padding_value=-100,
+        )
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "pixel_values": pixel_values,
+            "labels": labels,
+        }
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.per_device_train_batch_size,
         shuffle=True,
-        num_workers=4,
-        pin_memory=True,
+        num_workers=0,
+        pin_memory=False,
+        collate_fn=collate_fn,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=args.per_device_eval_batch_size,
         shuffle=False,
-        num_workers=2,
-        pin_memory=True,
+        num_workers=0,
+        pin_memory=False,
+        collate_fn=collate_fn,
     )
 
     # オプティマイザ
@@ -385,9 +437,9 @@ def train(args: argparse.Namespace) -> None:
     warmup_steps = int(total_steps * args.warmup_ratio)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
 
-    # Accelerate でラップ
-    model, optimizer, train_loader, val_loader, scheduler = accelerator.prepare(
-        model, optimizer, train_loader, val_loader, scheduler
+    # Accelerate でラップ (device_map="auto" 使用時はモデルを除く)
+    optimizer, train_loader, val_loader, scheduler = accelerator.prepare(
+        optimizer, train_loader, val_loader, scheduler
     )
 
     # 訓練ループ
@@ -404,15 +456,14 @@ def train(args: argparse.Namespace) -> None:
             with accelerator.accumulate(model):
                 input_ids = batch["input_ids"]
                 attention_mask = batch["attention_mask"]
-                pixel_values = batch["pixel_values"]
-                labels_action = batch["labels"]  # (B, 7)
+                pixel_values = batch["pixel_values"].to(torch.bfloat16)
 
-                # OpenVLA の forward (アクション予測)
+                # OpenVLA の forward (instruction 以降の action 文字列を予測)
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     pixel_values=pixel_values,
-                    labels=input_ids,  # language modeling loss
+                    labels=batch["labels"],  # -100 マスク済み action トークン
                 )
                 loss = outputs.loss
                 accelerator.backward(loss)
@@ -450,8 +501,8 @@ def train(args: argparse.Namespace) -> None:
                     outputs = model(
                         input_ids=batch["input_ids"],
                         attention_mask=batch["attention_mask"],
-                        pixel_values=batch["pixel_values"],
-                        labels=batch["input_ids"],
+                        pixel_values=batch["pixel_values"].to(torch.bfloat16),
+                        labels=batch["labels"],  # -100 マスク済み action トークン
                     )
                     val_losses.append(outputs.loss.item())
 
