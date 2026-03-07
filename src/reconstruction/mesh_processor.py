@@ -28,7 +28,6 @@ class MeshMethod(str, Enum):
     TSDF = "tsdf"
     POISSON = "poisson"
     MARCHING_CUBES = "marching_cubes"
-    NKSR = "nksr"
 
 
 class FaceLabel(str, Enum):
@@ -355,7 +354,7 @@ class MeshProcessor:
         """Extract a triangle mesh using the specified method.
 
         Args:
-            method: Extraction method ('tsdf', 'poisson', 'marching_cubes', 'nksr').
+            method: Extraction method ('tsdf', 'poisson', 'marching_cubes').
             **kwargs: Method-specific parameters.
 
         Returns:
@@ -370,8 +369,6 @@ class MeshProcessor:
             self._extract_poisson(**kwargs)
         elif method == MeshMethod.MARCHING_CUBES:
             self._extract_marching_cubes(**kwargs)
-        elif method == MeshMethod.NKSR:
-            self._extract_nksr(**kwargs)
 
         if self._mesh is not None:
             vertices = np.asarray(self._mesh.vertices)
@@ -481,78 +478,6 @@ class MeshProcessor:
         self._mesh = mesh
         self._mesh.compute_vertex_normals()
         self._timings["extract_poisson"] = time.perf_counter() - t0
-
-    def _extract_nksr(
-        self,
-        device: str = "cuda:0",
-        detail_level: float = 1.0,
-    ) -> None:
-        """Extract mesh via Neural Kernel Surface Reconstruction (GPU).
-
-        NKSR uses learned neural kernels for adaptive geometry fitting,
-        producing higher-quality meshes than Poisson for noisy/sparse data.
-        Requires GPU with ~4-8GB VRAM.
-
-        Args:
-            device: CUDA device for reconstruction.
-            detail_level: Controls mesh detail (default 1.0).
-        """
-        import nksr
-        import torch
-
-        o3d = self._o3d
-        t0 = time.perf_counter()
-
-        if self._pcd is None:
-            raise ValueError("No point cloud loaded. Call load_point_cloud() first.")
-
-        points = np.asarray(self._pcd.points).astype(np.float32)
-
-        # NKSR can work without normals, but quality is better with them
-        if self._pcd.has_normals():
-            normals = np.asarray(self._pcd.normals).astype(np.float32)
-        else:
-            console.print("    Estimating normals for NKSR...")
-            self._pcd.estimate_normals(
-                search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30)
-            )
-            self._pcd.orient_normals_towards_camera_location(
-                camera_location=np.array([0.0, 0.0, 10.0])
-            )
-            normals = np.asarray(self._pcd.normals).astype(np.float32)
-
-        console.print(f"    NKSR: {len(points):,} points → device={device}")
-
-        # Run NKSR reconstruction on GPU
-        input_xyz = torch.from_numpy(points).to(device)
-        input_normal = torch.from_numpy(normals).to(device)
-
-        reconstructor = nksr.Reconstructor(device)
-        field = reconstructor.reconstruct(
-            input_xyz,
-            input_normal,
-            detail_level=detail_level,
-        )
-        nksr_mesh = field.extract_dual_mesh(mise_iter=1)
-
-        # Convert to Open3D TriangleMesh
-        verts = nksr_mesh.v.cpu().numpy().astype(np.float64)
-        faces = nksr_mesh.f.cpu().numpy().astype(np.int32)
-
-        console.print(f"    NKSR result: {len(verts):,} vertices, {len(faces):,} faces")
-
-        mesh = o3d.geometry.TriangleMesh(
-            o3d.utility.Vector3dVector(verts),
-            o3d.utility.Vector3iVector(faces),
-        )
-        mesh.compute_vertex_normals()
-
-        # Cleanup GPU memory
-        del reconstructor, field, nksr_mesh, input_xyz, input_normal
-        torch.cuda.empty_cache()
-
-        self._mesh = mesh
-        self._timings["extract_nksr"] = time.perf_counter() - t0
 
     def _extract_marching_cubes(
         self,

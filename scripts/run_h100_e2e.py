@@ -518,7 +518,6 @@ def main():
     )
     parser.add_argument(
         "--mesh-method",
-        choices=["poisson", "nksr"],
         default="poisson",
         help="Mesh reconstruction method (default: poisson)",
     )
