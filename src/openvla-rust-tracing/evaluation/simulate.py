@@ -53,18 +53,7 @@ if TYPE_CHECKING:
     from peft import PeftModel
 
 # ─── アクション定義 (generate_dataset.py と同じ) ─────────────────────────
-ACTIONS: dict[str, tuple[float, float, float]] = {
-    "up":          (0.0,    1.0,  0.0),
-    "down":        (0.0,   -1.0,  0.0),
-    "left":        (-1.0,   0.0,  0.0),
-    "right":       (1.0,    0.0,  0.0),
-    "upper_right": ( 0.707, 0.707, 0.0),
-    "upper_left":  (-0.707, 0.707, 0.0),
-    "lower_right": ( 0.707,-0.707, 0.0),
-    "lower_left":  (-0.707,-0.707, 0.0),
-    "backtrack":   (0.0,    0.0,  1.0),
-}
-
+# アクション → (dr, dc): dr=行移動量, dc=列移動量
 ACTION_DELTAS: dict[str, tuple[int, int]] = {
     "up":          (-1,  0),
     "down":        ( 1,  0),
@@ -79,7 +68,7 @@ ACTION_DELTAS: dict[str, tuple[int, int]] = {
 
 PATCH_SIZE = 224
 ACTION_DIM = 7
-BACKTRACK_THRESHOLD = 0.5  # z > threshold でバックトラックと判定
+INSTRUCTION = "Follow the rust trace. Navigate to continue tracking the corrosion path."
 
 # 可視化カラー (BGR)
 COLOR_PATH = (0, 200, 0)       # 通常経路: 緑
@@ -105,29 +94,30 @@ class SimulationResult:
 # ─── アクション離散化 ─────────────────────────────────────────────────────
 def discretize_action(raw_action: np.ndarray) -> str:
     """
-    モデルの 3D 連続出力をユークリッド距離で最近傍の 9 方向に離散化する。
+    モデルの出力 [Δcol, Δrow, ...] をユークリッド距離で最近傍の 9 方向に離散化する。
 
     Parameters:
         raw_action: shape (7,) の float32 配列 (OpenVLA 出力)
-                    先頭 3 次元 [x, y, z] を使用
+                    先頭 2 次元 [Δcol, Δrow] を使用
 
     Returns:
         action_name: "up", "down", ..., "backtrack" のいずれか
     """
-    x, y, z = float(raw_action[0]), float(raw_action[1]), float(raw_action[2])
+    dc = float(raw_action[0])  # 列移動量
+    dr = float(raw_action[1])  # 行移動量
 
-    # z 軸でバックトラックを先に判定 (通常移動との誤判定を防ぐ)
-    if z > BACKTRACK_THRESHOLD:
+    # [0, 0] はバックトラック (端点 or 行き詰まり)
+    if abs(dc) < 0.3 and abs(dr) < 0.3:
         return "backtrack"
 
-    # x,y 平面で最近傍の通常アクションを探す
+    # ACTION_DELTAS で最近傍アクションを探す
     best_action = "up"
     best_dist = float("inf")
 
-    for action_name, (ax, ay, az) in ACTIONS.items():
+    for action_name, (adr, adc) in ACTION_DELTAS.items():
         if action_name == "backtrack":
             continue
-        dist = math.sqrt((x - ax) ** 2 + (y - ay) ** 2)
+        dist = math.sqrt((dr - adr) ** 2 + (dc - adc) ** 2)
         if dist < best_dist:
             best_dist = dist
             best_action = action_name
@@ -202,16 +192,9 @@ class RustTracingEnv:
         patch_resized = cv2.resize(patch, (self.patch_size, self.patch_size))
         return cv2.cvtColor(patch_resized, cv2.COLOR_BGR2RGB)
 
-    def build_instruction(self, history_len: int = 3) -> str:
-        """履歴付き instruction を生成する。"""
-        recent = self.history[-history_len:] if self.history else []
-        if recent:
-            history_str = "; ".join([f"t-{i+1}: {a}" for i, a in enumerate(reversed(recent))])
-            return (
-                f"[History: {history_str}] "
-                "Follow the rust trace. Navigate to continue tracking the corrosion path."
-            )
-        return "Follow the rust trace. Navigate to continue tracking the corrosion path."
+    def build_instruction(self) -> str:
+        """instruction を返す。"""
+        return INSTRUCTION
 
     def step(self, action_name: str) -> tuple[bool, str]:
         """
@@ -282,7 +265,6 @@ class OpenVLARustAgent:
     def __init__(
         self,
         model_path: str,
-        history_len: int = 3,
         device: str = "cuda",
     ) -> None:
         import torch
@@ -290,7 +272,6 @@ class OpenVLARustAgent:
         from peft import PeftModel
 
         self.device = device
-        self.history_len = history_len
 
         print(f"[OpenVLARustAgent] モデルを読み込み中: {model_path}")
         self.processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
@@ -353,7 +334,7 @@ class OpenVLARustAgent:
         except (ValueError, IndexError):
             # パースに失敗した場合はランダムなアクションにフォールバック
             import random
-            action = random.choice(list(ACTIONS.keys()))
+            action = random.choice([k for k in ACTION_DELTAS if k != "backtrack"])
             print(f"[predict_action] parse failed → random: {action}")
             return action
 
@@ -540,7 +521,7 @@ def run_simulation(
 
     for step in range(max_steps):
         obs = env.get_observation()
-        instruction = env.build_instruction(history_len=3)
+        instruction = env.build_instruction()
         action_name = agent.predict_action(obs, instruction)
         action_history.append(action_name)
 

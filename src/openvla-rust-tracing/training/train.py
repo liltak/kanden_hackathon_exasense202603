@@ -66,76 +66,16 @@ RUST_ACTION_DIM = 3     # 実際に使用する次元数
 ACTION_NORM_MIN = -1.0
 ACTION_NORM_MAX = 1.0
 
-MINIMAP_SIZE = 56       # ミニマップのサイズ (パッチ左上に埋め込む)
-MINIMAP_ALPHA = 0.6     # オーバーレイの透明度
-
-
-# ─── ミニマップ生成 ─────────────────────────────────────────────────────
-def build_minimap(
-    visited: set[tuple[int, int]],
-    rust_patches: set[tuple[int, int]],
-    current_pos: tuple[int, int],
-    grid_rows: int,
-    grid_cols: int,
-    minimap_size: int = MINIMAP_SIZE,
-) -> np.ndarray:
-    """
-    探索済みエリアのミニマップを生成する。
-
-    Color coding:
-      黒:        未探索
-      緑 (dim):  サビなし探索済み
-      赤:        サビあり探索済み
-      青:        現在位置
-    """
-    minimap = np.zeros((grid_rows, grid_cols, 3), dtype=np.uint8)
-
-    for r, c in visited:
-        if (r, c) in rust_patches:
-            minimap[r, c] = [0, 0, 180]    # 赤 (BGR)
-        else:
-            minimap[r, c] = [0, 100, 0]    # 暗緑 (BGR)
-
-    cr, cc = current_pos
-    if 0 <= cr < grid_rows and 0 <= cc < grid_cols:
-        minimap[cr, cc] = [200, 0, 0]       # 青 (BGR)
-
-    # リサイズ (nearest interpolation で格子感を維持)
-    # cv2 を使用することで Mac / H100 どちらでも動作する
-    minimap_resized = cv2.resize(
-        minimap, (minimap_size, minimap_size), interpolation=cv2.INTER_NEAREST
-    )
-    return minimap_resized
-
-
-def overlay_minimap(patch: np.ndarray, minimap: np.ndarray, alpha: float = MINIMAP_ALPHA) -> np.ndarray:
-    """ミニマップをパッチ画像の左上にオーバーレイする。"""
-    result = patch.copy()
-    h, w = minimap.shape[:2]
-    roi = result[:h, :w]
-    blended = (roi.astype(float) * (1 - alpha) + minimap.astype(float) * alpha).astype(np.uint8)
-    result[:h, :w] = blended
-    return result
-
-
 # ─── RLDS Dataset ────────────────────────────────────────────────────────
 class RLDSRustDataset(Dataset):
-    """
-    TFRecord から読み込む PyTorch Dataset。
-
-    history_len フレームの画像を結合して入力とする。
-    """
+    """TFRecord から読み込む PyTorch Dataset。"""
 
     def __init__(
         self,
         tfrecord_path: str,
-        history_len: int = 3,
-        use_minimap: bool = False,
         processor=None,
     ) -> None:
         super().__init__()
-        self.history_len = history_len
-        self.use_minimap = use_minimap
         self.processor = processor
 
         # TFRecord の全レコードをメモリに展開
@@ -177,61 +117,10 @@ class RLDSRustDataset(Dataset):
     def __len__(self) -> int:
         return len(self._records)
 
-    def _build_history_instruction(self, idx: int) -> str:
-        """
-        直近 history_len フレームの action 情報を instruction に付加する。
-        バックトラック判断の補助として機能する。
-        """
-        base_instruction = self._records[idx]["instruction"]
-        history_parts = []
-        for h in range(self.history_len - 1, 0, -1):
-            prev_idx = idx - h
-            if prev_idx < 0:
-                continue
-            prev = self._records[prev_idx]
-            action = prev["action"]
-            z_val = action[2]
-            x_val, y_val = action[0], action[1]
-            if z_val > 0.5:
-                direction = "backtrack"
-            elif abs(x_val) < 0.1 and y_val > 0:
-                direction = "up"
-            elif abs(x_val) < 0.1 and y_val < 0:
-                direction = "down"
-            elif x_val > 0 and abs(y_val) < 0.1:
-                direction = "right"
-            elif x_val < 0 and abs(y_val) < 0.1:
-                direction = "left"
-            elif x_val > 0 and y_val > 0:
-                direction = "upper_right"
-            elif x_val < 0 and y_val > 0:
-                direction = "upper_left"
-            elif x_val > 0 and y_val < 0:
-                direction = "lower_right"
-            else:
-                direction = "lower_left"
-            history_parts.append(f"t-{h}: {direction}")
-
-        if history_parts:
-            history_str = "; ".join(history_parts)
-            return f"[History: {history_str}] {base_instruction}"
-        return base_instruction
-
     def __getitem__(self, idx: int) -> dict:
         record = self._records[idx]
         image = record["image"]  # (224, 224, 3) RGB uint8
-
-        # ミニマップオーバーレイ (オプション)
-        if self.use_minimap:
-            # 訓練時は疑似的なミニマップをランダム生成
-            minimap = np.zeros((MINIMAP_SIZE, MINIMAP_SIZE, 3), dtype=np.uint8)
-            minimap[:, :, 0] = np.random.randint(0, 100, (MINIMAP_SIZE, MINIMAP_SIZE), dtype=np.uint8)
-            image_bgr = image[:, :, ::-1].copy()  # RGB → BGR
-            image_bgr = overlay_minimap(image_bgr, minimap)
-            image = image_bgr[:, :, ::-1]  # BGR → RGB
-
-        # 履歴付き instruction
-        instruction = self._build_history_instruction(idx)
+        instruction = record["instruction"]
 
         # アクションをそのまま使用 (7D float)
         action = record["action"].astype(np.float32)
@@ -241,25 +130,24 @@ class RLDSRustDataset(Dataset):
             from PIL import Image as PILImage
             pil_image = PILImage.fromarray(image)
 
-            # アクション値を文字列化 ("0.5000 -0.3000 0.0000 ...")
+            # アクション値を文字列化 ("1.0000 0.0000 0.0000 ...")
             action_str = " ".join([f"{v:.4f}" for v in action])
-            full_text = instruction + " " + action_str
 
-            # instruction のトークン長をテキストのみで計測（画像処理を省略してメモリ節約）
-            instr_len = self.processor.tokenizer(
-                instruction, return_tensors="pt"
-            )["input_ids"].shape[1]
-
-            # instruction + action_str を画像付きでトークナイズ（1回のみ）
+            # 画像+テキスト全体を1回でトークナイズ
             inputs_full = self.processor(
-                text=full_text,
+                text=instruction + " " + action_str,
                 images=pil_image,
                 return_tensors="pt",
             )
 
-            # labels: instruction 部分は -100（損失計算しない）、action 部分のみ有効
+            # action のトークン長をテキストのみで計算（画像処理なし・安価）
+            action_token_len = self.processor.tokenizer(
+                action_str, return_tensors="pt"
+            )["input_ids"].shape[1]
+
+            # labels: 画像+instruction 部分は -100、action トークンのみ損失計算
             labels = inputs_full["input_ids"].clone()
-            labels[:, :instr_len] = -100
+            labels[:, :-action_token_len] = -100
 
             return {
                 "input_ids": inputs_full["input_ids"].squeeze(0),
@@ -372,14 +260,10 @@ def train(args: argparse.Namespace) -> None:
     # データセット
     train_dataset = RLDSRustDataset(
         tfrecord_path=str(Path(args.data_dir) / "train.tfrecord.gz"),
-        history_len=args.history_len,
-        use_minimap=args.use_minimap,
         processor=processor,
     )
     val_dataset = RLDSRustDataset(
         tfrecord_path=str(Path(args.data_dir) / "val.tfrecord.gz"),
-        history_len=args.history_len,
-        use_minimap=args.use_minimap,
         processor=processor,
     )
 
@@ -555,11 +439,6 @@ def main() -> None:
     # データ設定
     parser.add_argument("--data_dir", type=str, default="data/rust_rlds",
                         help="TFRecord データディレクトリ")
-    parser.add_argument("--history_len", type=int, default=3,
-                        help="画像履歴フレーム数 (3〜5)")
-    parser.add_argument("--use_minimap", action="store_true",
-                        help="ミニマップオーバーレイを有効化")
-
     # LoRA 設定
     parser.add_argument("--lora_rank", type=int, default=16)
     parser.add_argument("--lora_alpha", type=int, default=32)
