@@ -19,6 +19,9 @@ build/
 data/.cache/
 data/waypoint_results/
 wandb/
+data/rust_dataset
+data/test
+results
 
 # Node.js
 node_modules/
