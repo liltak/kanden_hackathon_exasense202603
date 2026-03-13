@@ -1106,7 +1106,10 @@ def process_reconstruction(
         progress.stop_task(task)
 
         task = progress.add_task(f"Extracting mesh ({method})...", total=None)
-        processor.extract_mesh(method=method, depth=poisson_depth)
+        mesh_kwargs: dict = {}
+        if MeshMethod(method) == MeshMethod.POISSON:
+            mesh_kwargs["depth"] = poisson_depth
+        processor.extract_mesh(method=method, **mesh_kwargs)
         progress.stop_task(task)
 
         task = progress.add_task("Cleaning mesh...", total=None)
@@ -1164,7 +1167,7 @@ def main():
         "--method",
         type=str,
         default="poisson",
-        choices=["tsdf", "poisson", "marching_cubes"],
+        choices=["tsdf", "poisson", "marching_cubes", "nksr"],
         help="Mesh extraction method (default: poisson)",
     )
     parser.add_argument(

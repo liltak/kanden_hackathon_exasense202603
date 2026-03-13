@@ -187,6 +187,7 @@ def run_mesh_phase(
     output_dir: Path,
     target_faces: int,
     expected_extent_m: float = 30.0,
+    mesh_method: str = "poisson",
 ) -> dict:
     """Phase 2: Run mesh processing pipeline."""
     from src.reconstruction.mesh_processor import GeoReference, process_reconstruction
@@ -194,6 +195,7 @@ def run_mesh_phase(
     console.print("\n[bold blue]═══ Phase 2: Mesh Processing ═══")
     console.print(f"  Point cloud: {point_cloud_path}")
     console.print(f"  Target faces: {target_faces}")
+    console.print(f"  Method: {mesh_method}")
 
     # Auto-estimate scale factor from point cloud bounding box
     scale_factor = estimate_scale_factor(point_cloud_path, expected_extent_m)
@@ -212,7 +214,7 @@ def run_mesh_phase(
     result = process_reconstruction(
         point_cloud_path=point_cloud_path,
         output_path=mesh_output,
-        method="poisson",
+        method=mesh_method,
         geo_ref=geo_ref,
         target_faces=target_faces,
     )
@@ -515,6 +517,11 @@ def main():
         help="Target mesh faces after decimation (default: 20000)",
     )
     parser.add_argument(
+        "--mesh-method",
+        default="poisson",
+        help="Mesh reconstruction method (default: poisson)",
+    )
+    parser.add_argument(
         "--expected-extent",
         type=float,
         default=30.0,
@@ -608,6 +615,7 @@ def main():
             output_dir=mesh_output,
             target_faces=args.target_faces,
             expected_extent_m=args.expected_extent,
+            mesh_method=args.mesh_method,
         )
         results["mesh"] = mesh_results
         mesh_path = Path(mesh_results["mesh_path"])
