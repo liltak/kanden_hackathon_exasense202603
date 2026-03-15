@@ -7,10 +7,16 @@ import type {
   PresetsResponse,
   ReconstructionStatus,
   ReportResponse,
+  RustInspectionRunRequest,
+  RustInspectionRunResponse,
+  RustInspectionStatus,
   ShadowTimelineResponse,
   SimulationRequest,
   SimulationResult,
   SunPositionsResponse,
+  WaypointGenerateRequest,
+  WaypointGenerateResponse,
+  WaypointStatus,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -178,4 +184,32 @@ export function getMeshGlbURL(meshId: string): string {
 export function createSimulationWS(taskId: string): WebSocket {
   const wsBase = API_BASE.replace(/^http/, "ws");
   return new WebSocket(`${wsBase}/api/ws/simulation/${taskId}`);
+}
+
+// Rust Inspection (OpenVLA)
+export async function getRustInspectionStatus(): Promise<RustInspectionStatus> {
+  return fetchJSON("/api/rust-inspection/status");
+}
+
+export async function runRustInspection(
+  req: RustInspectionRunRequest,
+): Promise<RustInspectionRunResponse> {
+  return fetchJSON("/api/rust-inspection/run", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+// Waypoint / world model
+export async function getWaypointStatus(): Promise<WaypointStatus> {
+  return fetchJSON("/api/waypoint/status");
+}
+
+export async function generateWaypoint(
+  req: WaypointGenerateRequest,
+): Promise<WaypointGenerateResponse> {
+  return fetchJSON("/api/waypoint/generate", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
 }

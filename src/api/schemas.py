@@ -6,6 +6,8 @@ and adds request/response models for all API endpoints.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -32,6 +34,18 @@ class ChatRequest(BaseModel):
 
 class ReportGenerateRequest(BaseModel):
     task_id: str | None = Field(None, description="Simulation task ID (uses latest if omitted)")
+
+
+class WaypointGenerateRequest(BaseModel):
+    prompt: str = Field(..., min_length=3, max_length=1000)
+    negative_prompt: str | None = Field(None, max_length=1000)
+    seed_source: Literal["demo", "upload", "viewer"] = "demo"
+    seed_image_data_url: str | None = None
+    template_key: str | None = Field(None, max_length=100)
+    view_name: Literal["bird", "south", "west"] = "bird"
+    steps: int = Field(12, ge=1, le=50)
+    guidance_scale: float = Field(6.5, ge=0, le=20)
+    strength: float = Field(0.65, ge=0, le=1)
 
 
 # ── Response Models ───────────────────────────────────────────────────────────
@@ -161,3 +175,90 @@ class ReconstructionStatus(BaseModel):
     step: str | None = None
     message: str | None = None
     mesh_id: str | None = None
+
+
+# ── Waypoint / World Model ──────────────────────────────────────────────────
+
+
+class WaypointMetricSchema(BaseModel):
+    annual_generation_kwh: float
+    co2_reduction_tons: float
+    installed_capacity_kw: float
+    estimated_payback_years: float
+
+
+class WaypointVariantSchema(BaseModel):
+    id: str
+    view_name: str
+    label: str
+    image_data_url: str
+
+
+class WaypointGenerateResponse(BaseModel):
+    request_id: str
+    status: str = Field(description="queued | running | complete | failed")
+    mock_mode: bool = True
+    prompt: str
+    negative_prompt: str | None = None
+    view_name: str
+    seed_image_data_url: str
+    result_image_data_url: str
+    metrics: WaypointMetricSchema
+    variants: list[WaypointVariantSchema]
+    latency_ms: int
+
+
+class WaypointStatusResponse(BaseModel):
+    service_status: str = Field(description="ready | loading | unavailable")
+    mock_mode: bool = True
+    model_name: str
+    device: str
+    gpu_available: bool
+    model_loaded: bool
+    queue_depth: int = Field(0, ge=0)
+    vram_used_gb: float | None = None
+
+
+# ── Rust Inspection (OpenVLA) ────────────────────────────────────────────────
+
+
+class RustInspectionRunRequest(BaseModel):
+    seed: int = Field(42, description="Random seed for mock data generation")
+    grid_rows: int = Field(5, ge=3, le=10, description="Grid rows (patch divisions)")
+    grid_cols: int = Field(5, ge=3, le=10, description="Grid cols (patch divisions)")
+    max_steps: int = Field(200, ge=10, le=1000, description="Max agent steps")
+    coverage_threshold: float = Field(0.95, ge=0.5, le=1.0, description="Target coverage rate")
+
+
+class RustInspectionMetricsSchema(BaseModel):
+    coverage_rate: float = Field(description="Visited rust patches / total rust patches")
+    total_steps: int = Field(description="Total agent steps taken")
+    backtrack_count: int = Field(description="Number of backtracks")
+    component_jumps: int = Field(description="Inter-component jump count")
+    rust_patch_count: int = Field(description="Total rust patches detected")
+    visited_rust_count: int = Field(description="Rust patches successfully visited")
+    grid_rows: int
+    grid_cols: int
+
+
+class RustInspectionResultSchema(BaseModel):
+    trajectory_image_data_url: str = Field(description="SVG data URL of trajectory visualization")
+    source_image_data_url: str | None = Field(None, description="Source image if uploaded")
+    metrics: RustInspectionMetricsSchema
+
+
+class RustInspectionRunResponse(BaseModel):
+    request_id: str
+    status: str = Field(description="complete | failed")
+    mock_mode: bool = True
+    result: RustInspectionResultSchema
+
+
+class RustInspectionStatusResponse(BaseModel):
+    service_status: str = Field(description="ready | loading | unavailable")
+    mock_mode: bool = True
+    model_name: str
+    device: str
+    gpu_available: bool
+    model_loaded: bool
+    vram_used_gb: float | None = None

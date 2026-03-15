@@ -137,3 +137,101 @@ export interface ReconstructionStatus {
   message: string | null;
   mesh_id: string | null;
 }
+
+export type WaypointSeedSource = "demo" | "upload" | "viewer";
+export type WaypointViewName = "bird" | "south" | "west";
+
+export interface WaypointGenerateRequest {
+  prompt: string;
+  negative_prompt?: string | null;
+  seed_source: WaypointSeedSource;
+  seed_image_data_url?: string | null;
+  template_key?: string | null;
+  view_name: WaypointViewName;
+  steps: number;
+  guidance_scale: number;
+  strength: number;
+}
+
+export interface WaypointMetric {
+  annual_generation_kwh: number;
+  co2_reduction_tons: number;
+  installed_capacity_kw: number;
+  estimated_payback_years: number;
+}
+
+export interface WaypointVariant {
+  id: string;
+  view_name: WaypointViewName;
+  label: string;
+  image_data_url: string;
+}
+
+export interface WaypointGenerateResponse {
+  request_id: string;
+  status: "queued" | "running" | "complete" | "failed";
+  mock_mode: boolean;
+  prompt: string;
+  negative_prompt: string | null;
+  view_name: WaypointViewName;
+  seed_image_data_url: string;
+  result_image_data_url: string;
+  metrics: WaypointMetric;
+  variants: WaypointVariant[];
+  latency_ms: number;
+}
+
+export interface WaypointStatus {
+  service_status: "ready" | "loading" | "unavailable";
+  mock_mode: boolean;
+  model_name: string;
+  device: string;
+  gpu_available: boolean;
+  model_loaded: boolean;
+  queue_depth: number;
+  vram_used_gb: number | null;
+}
+
+// Rust Inspection (OpenVLA)
+
+export interface RustInspectionRunRequest {
+  seed: number;
+  grid_rows: number;
+  grid_cols: number;
+  max_steps: number;
+  coverage_threshold: number;
+}
+
+export interface RustInspectionMetrics {
+  coverage_rate: number;
+  total_steps: number;
+  backtrack_count: number;
+  component_jumps: number;
+  rust_patch_count: number;
+  visited_rust_count: number;
+  grid_rows: number;
+  grid_cols: number;
+}
+
+export interface RustInspectionResult {
+  trajectory_image_data_url: string;
+  source_image_data_url: string | null;
+  metrics: RustInspectionMetrics;
+}
+
+export interface RustInspectionRunResponse {
+  request_id: string;
+  status: "complete" | "failed";
+  mock_mode: boolean;
+  result: RustInspectionResult;
+}
+
+export interface RustInspectionStatus {
+  service_status: "ready" | "loading" | "unavailable";
+  mock_mode: boolean;
+  model_name: string;
+  device: string;
+  gpu_available: boolean;
+  model_loaded: boolean;
+  vram_used_gb: number | null;
+}
