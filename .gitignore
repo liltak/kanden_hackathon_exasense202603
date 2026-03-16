@@ -29,3 +29,9 @@ frontend/.next/
 
 # Environment
 .env
+
+# openvla-sim
+datasets
+src/openvla-sim/objects
+src/openvla-sim/third_party
+
