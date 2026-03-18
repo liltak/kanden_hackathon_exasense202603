@@ -28,6 +28,7 @@ class MeshMethod(str, Enum):
     TSDF = "tsdf"
     POISSON = "poisson"
     MARCHING_CUBES = "marching_cubes"
+    KAOLIN_DMTET = "kaolin_dmtet"
 
 
 class FaceLabel(str, Enum):
@@ -87,6 +88,66 @@ def _import_open3d():
             "or:\n"
             "  uv add open3d"
         )
+
+
+def _generate_tet_grid(
+    resolution: int,
+    device: str,
+) -> tuple:
+    """Generate a Kuhn-triangulated regular tetrahedral grid in [-1,1]^3.
+
+    Each cube is split into 6 tetrahedra sharing the body diagonal from
+    the min corner to the max corner. This decomposition is conforming
+    across adjacent cubes.
+
+    Args:
+        resolution: Number of cells per axis.
+        device: Torch device string.
+
+    Returns:
+        (vertices, tets): vertices (V, 3) float32, tets (T, 4) int64.
+    """
+    import torch
+
+    n = resolution + 1  # vertices per edge
+
+    lin = torch.linspace(-1.0, 1.0, n, device=device)
+    gx, gy, gz = torch.meshgrid(lin, lin, lin, indexing="ij")
+    vertices = torch.stack(
+        [gx.reshape(-1), gy.reshape(-1), gz.reshape(-1)], dim=-1
+    )
+
+    # Cube corner indices (vectorized)
+    r = torch.arange(resolution, device=device)
+    ii, jj, kk = torch.meshgrid(r, r, r, indexing="ij")
+    ii, jj, kk = ii.reshape(-1), jj.reshape(-1), kk.reshape(-1)
+
+    def idx(i, j, k):
+        return i * n * n + j * n + k
+
+    v0 = idx(ii, jj, kk)
+    v1 = idx(ii + 1, jj, kk)
+    v2 = idx(ii, jj + 1, kk)
+    v3 = idx(ii + 1, jj + 1, kk)
+    v4 = idx(ii, jj, kk + 1)
+    v5 = idx(ii + 1, jj, kk + 1)
+    v6 = idx(ii, jj + 1, kk + 1)
+    v7 = idx(ii + 1, jj + 1, kk + 1)
+
+    # 6-tet Kuhn decomposition: all share body diagonal v0-v7
+    tets = torch.cat(
+        [
+            torch.stack([v0, v1, v3, v7], dim=-1),
+            torch.stack([v0, v1, v5, v7], dim=-1),
+            torch.stack([v0, v2, v3, v7], dim=-1),
+            torch.stack([v0, v2, v6, v7], dim=-1),
+            torch.stack([v0, v4, v5, v7], dim=-1),
+            torch.stack([v0, v4, v6, v7], dim=-1),
+        ],
+        dim=0,
+    )
+
+    return vertices, tets
 
 
 class MeshProcessor:
@@ -354,7 +415,7 @@ class MeshProcessor:
         """Extract a triangle mesh using the specified method.
 
         Args:
-            method: Extraction method ('tsdf', 'poisson', 'marching_cubes').
+            method: Extraction method ('tsdf', 'poisson', 'marching_cubes', 'kaolin_dmtet').
             **kwargs: Method-specific parameters.
 
         Returns:
@@ -369,6 +430,8 @@ class MeshProcessor:
             self._extract_poisson(**kwargs)
         elif method == MeshMethod.MARCHING_CUBES:
             self._extract_marching_cubes(**kwargs)
+        elif method == MeshMethod.KAOLIN_DMTET:
+            self._extract_kaolin_dmtet(**kwargs)
 
         if self._mesh is not None:
             vertices = np.asarray(self._mesh.vertices)
@@ -478,6 +541,162 @@ class MeshProcessor:
         self._mesh = mesh
         self._mesh.compute_vertex_normals()
         self._timings["extract_poisson"] = time.perf_counter() - t0
+
+    def _extract_kaolin_dmtet(
+        self,
+        device: str = "cuda:0",
+        grid_resolution: int = 128,
+        iterations: int = 500,
+        learning_rate: float = 5e-4,
+        num_samples: int = 50000,
+    ) -> None:
+        """Extract mesh via Deep Marching Tetrahedra (GPU).
+
+        Uses Kaolin's marching_tetrahedra with SDF optimization on a
+        regular tetrahedral grid. Optimizes SDF values to match the input
+        point cloud via Chamfer distance.
+
+        Apache 2.0 licensed (kaolin.ops.conversions).
+
+        Args:
+            device: CUDA device for reconstruction.
+            grid_resolution: Tet grid resolution (default 64).
+            iterations: Optimization iterations (default 500).
+            learning_rate: Adam learning rate.
+            num_samples: Points sampled from mesh per iteration.
+        """
+        import torch
+        from kaolin.metrics.pointcloud import chamfer_distance, sided_distance
+        from kaolin.ops.conversions import marching_tetrahedra
+        from kaolin.ops.mesh import sample_points
+
+        o3d = self._o3d
+        t0 = time.perf_counter()
+
+        if self._pcd is None:
+            raise ValueError("No point cloud loaded. Call load_point_cloud() first.")
+
+        points = np.asarray(self._pcd.points).astype(np.float32)
+
+        if self._pcd.has_normals():
+            normals = np.asarray(self._pcd.normals).astype(np.float32)
+        else:
+            console.print("    Estimating normals for DMTet...")
+            self._pcd.estimate_normals(
+                search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30)
+            )
+            self._pcd.orient_normals_towards_camera_location(
+                camera_location=np.array([0.0, 0.0, 10.0])
+            )
+            normals = np.asarray(self._pcd.normals).astype(np.float32)
+
+        # Normalize point cloud to [-0.9, 0.9]
+        bbox_min, bbox_max = points.min(axis=0), points.max(axis=0)
+        center = (bbox_min + bbox_max) / 2
+        scale = float((bbox_max - bbox_min).max()) / 2 * 1.15
+        points_n = (points - center) / scale
+
+        console.print(
+            f"    DMTet: {len(points):,} points, "
+            f"grid={grid_resolution}, iters={iterations}, device={device}"
+        )
+
+        pts = torch.from_numpy(points_n).to(device)
+        nrm = torch.from_numpy(normals).to(device)
+        nrm = nrm / (nrm.norm(dim=1, keepdim=True) + 1e-8)
+
+        # Generate tetrahedral grid (Kuhn triangulation)
+        tet_verts, tets = _generate_tet_grid(grid_resolution, device)
+        console.print(
+            f"    Tet grid: {tet_verts.shape[0]:,} vertices, "
+            f"{tets.shape[0]:,} tetrahedra"
+        )
+
+        # Initialize SDF from nearest-neighbor distance with normal-based sign
+        with torch.no_grad():
+            dists_sq, idx = sided_distance(
+                tet_verts.unsqueeze(0), pts.unsqueeze(0)
+            )
+            nearest_nrm = nrm[idx[0]]
+            to_vert = tet_verts - pts[idx[0]]
+            signs = (to_vert * nearest_nrm).sum(dim=1).sign()
+            signs[signs == 0] = 1.0
+            initial_sdf = signs * dists_sq[0].sqrt()
+
+        # Optimize SDF + vertex deformation
+        sdf_param = torch.nn.Parameter(initial_sdf.clone())
+        deform_param = torch.nn.Parameter(torch.zeros_like(tet_verts))
+        optimizer = torch.optim.Adam([sdf_param, deform_param], lr=learning_rate)
+
+        best_loss = float("inf")
+        best_sdf = initial_sdf.clone()
+        best_deform = torch.zeros_like(tet_verts)
+
+        for it in range(iterations):
+            verts_d = tet_verts + torch.tanh(deform_param) / grid_resolution
+
+            mesh_verts_list, mesh_faces_list = marching_tetrahedra(
+                verts_d.unsqueeze(0), tets, sdf_param.unsqueeze(0)
+            )
+
+            mv, mf = mesh_verts_list[0], mesh_faces_list[0]
+            if mv.shape[0] == 0 or mf.shape[0] == 0:
+                continue
+
+            pred_pts, _ = sample_points(mv.unsqueeze(0), mf, num_samples)
+            pred_pts = pred_pts[0]
+
+            loss = chamfer_distance(pred_pts.unsqueeze(0), pts.unsqueeze(0))
+
+            # Deformation regularization after warm-up
+            if it > iterations // 3:
+                loss = loss + 0.01 * (deform_param**2).mean()
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            loss_val = loss.item()
+            if loss_val < best_loss:
+                best_loss = loss_val
+                best_sdf = sdf_param.data.clone()
+                best_deform = deform_param.data.clone()
+
+            if it % 100 == 0:
+                console.print(f"    DMTet iter {it}/{iterations}: loss={loss_val:.6f}")
+
+        console.print(f"    DMTet optimization done, best loss={best_loss:.6f}")
+
+        # Extract final mesh using best parameters
+        with torch.no_grad():
+            verts_d = tet_verts + torch.tanh(best_deform) / grid_resolution
+            final_verts_list, final_faces_list = marching_tetrahedra(
+                verts_d.unsqueeze(0), tets, best_sdf.unsqueeze(0)
+            )
+
+        verts_np = final_verts_list[0].cpu().numpy()
+        faces_np = final_faces_list[0].cpu().numpy()
+
+        # Denormalize to original scale
+        verts_np = verts_np * scale + center
+
+        console.print(
+            f"    DMTet result: {len(verts_np):,} vertices, {len(faces_np):,} faces"
+        )
+
+        mesh = o3d.geometry.TriangleMesh(
+            o3d.utility.Vector3dVector(verts_np.astype(np.float64)),
+            o3d.utility.Vector3iVector(faces_np.astype(np.int32)),
+        )
+        mesh.compute_vertex_normals()
+
+        # Cleanup GPU memory
+        del sdf_param, deform_param, tet_verts, tets, pts, nrm
+        del best_sdf, best_deform
+        torch.cuda.empty_cache()
+
+        self._mesh = mesh
+        self._timings["extract_kaolin_dmtet"] = time.perf_counter() - t0
 
     def _extract_marching_cubes(
         self,
@@ -1167,7 +1386,7 @@ def main():
         "--method",
         type=str,
         default="poisson",
-        choices=["tsdf", "poisson", "marching_cubes", "nksr"],
+        choices=["tsdf", "poisson", "marching_cubes", "kaolin_dmtet"],
         help="Mesh extraction method (default: poisson)",
     )
     parser.add_argument(

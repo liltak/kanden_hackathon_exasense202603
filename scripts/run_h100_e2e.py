@@ -518,6 +518,7 @@ def main():
     )
     parser.add_argument(
         "--mesh-method",
+        choices=["poisson", "kaolin_dmtet"],
         default="poisson",
         help="Mesh reconstruction method (default: poisson)",
     )
