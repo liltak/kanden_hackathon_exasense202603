@@ -198,6 +198,8 @@ def run_vggt(
     max_images: int | None = None,
     confidence_threshold: float = 3.0,
     dtype: str = "float16",
+    foreground_mask: str | None = None,
+    foreground_depth_sigma: float = 2.0,
 ) -> VGGTResult:
     """Run VGGT inference on a directory of images.
 
@@ -209,6 +211,10 @@ def run_vggt(
         confidence_threshold: Confidence percentile for filtering (0-100).
             Points below this percentile are removed.
         dtype: Model dtype ("float16" or "float32").
+        foreground_mask: Foreground extraction method to filter background
+            points. One of "depth", "semantic", "both", or None (disabled).
+        foreground_depth_sigma: Std dev threshold for depth-based foreground
+            filtering (default 2.0).
 
     Returns:
         VGGTResult with point cloud, camera poses, and depth maps.
@@ -331,6 +337,20 @@ def run_vggt(
         conf_cutoff = np.percentile(all_conf_flat, confidence_threshold)
         console.print(f"  Confidence: percentile={confidence_threshold}, cutoff={conf_cutoff:.4f}")
 
+        # Compute foreground masks if requested
+        fg_masks = None
+        if foreground_mask is not None:
+            from src.reconstruction.foreground import compute_foreground_masks
+
+            fg_masks = compute_foreground_masks(
+                images=images,
+                depth_maps=[raw_depths[i] for i in range(len(image_names))],
+                confidence_maps=[pred_conf[i] for i in range(len(image_names))],
+                method=foreground_mask,
+                device=str(torch_device),
+                depth_sigma=foreground_depth_sigma,
+            )
+
         # Collect per-image results
         all_points = []
         all_colors = []
@@ -344,6 +364,18 @@ def run_vggt(
             frame_depth = raw_depths[i]  # (H, W)
 
             mask = (frame_conf >= conf_cutoff) & (frame_conf > 1e-5)
+
+            # Apply foreground mask if available
+            if fg_masks is not None:
+                fg = fg_masks[i]
+                # Resize foreground mask to match prediction resolution if needed
+                if fg.shape != mask.shape:
+                    from PIL import Image as _PILImage
+                    fg_img = _PILImage.fromarray(fg.astype(np.uint8) * 255)
+                    fg_img = fg_img.resize((mask.shape[1], mask.shape[0]), _PILImage.NEAREST)
+                    fg = np.array(fg_img) > 127
+                mask = mask & fg
+
             valid_points = frame_points[mask]  # (M, 3)
 
             # Get colors from the original image, resized to match prediction resolution
@@ -414,6 +446,8 @@ def run_vggt(
         "num_images": len(image_names),
         "num_points": len(point_cloud),
         "confidence_threshold": confidence_threshold,
+        "foreground_mask": foreground_mask,
+        "foreground_depth_sigma": foreground_depth_sigma,
         "device": str(torch_device),
         "dtype": dtype,
         "output_files": {
@@ -487,6 +521,18 @@ def main():
         default="float16",
         help="Model dtype (default: float16)",
     )
+    parser.add_argument(
+        "--foreground-mask",
+        choices=["depth", "semantic", "sam", "sam+depth", "both"],
+        default=None,
+        help="Foreground extraction method to filter background points",
+    )
+    parser.add_argument(
+        "--foreground-depth-sigma",
+        type=float,
+        default=2.0,
+        help="Std dev threshold for depth-based foreground filtering (default: 2.0)",
+    )
     args = parser.parse_args()
 
     if args.output_dir is None:
@@ -501,6 +547,8 @@ def main():
         max_images=args.max_images,
         confidence_threshold=args.confidence_threshold,
         dtype=args.dtype,
+        foreground_mask=args.foreground_mask,
+        foreground_depth_sigma=args.foreground_depth_sigma,
     )
 
 

@@ -105,6 +105,8 @@ def run_vggt_phase(
     max_images: int,
     confidence_threshold: float,
     dtype: str,
+    foreground_mask: str | None = None,
+    foreground_depth_sigma: float = 2.0,
 ) -> dict:
     """Phase 1: Run VGGT 3D reconstruction."""
     from src.reconstruction.vggt_runner import run_vggt
@@ -114,6 +116,8 @@ def run_vggt_phase(
     console.print(f"  Max images: {max_images}")
     console.print(f"  Confidence threshold: {confidence_threshold}")
     console.print(f"  Dtype: {dtype}")
+    if foreground_mask:
+        console.print(f"  Foreground mask: {foreground_mask} (σ={foreground_depth_sigma})")
 
     t0 = time.perf_counter()
     result = run_vggt(
@@ -123,6 +127,8 @@ def run_vggt_phase(
         max_images=max_images,
         confidence_threshold=confidence_threshold,
         dtype=dtype,
+        foreground_mask=foreground_mask,
+        foreground_depth_sigma=foreground_depth_sigma,
     )
     elapsed = time.perf_counter() - t0
 
@@ -535,6 +541,18 @@ def main():
         help="Output directory for results",
     )
     parser.add_argument(
+        "--foreground-mask",
+        choices=["depth", "semantic", "sam", "sam+depth", "both"],
+        default=None,
+        help="Foreground extraction method for VGGT point cloud filtering",
+    )
+    parser.add_argument(
+        "--foreground-depth-sigma",
+        type=float,
+        default=2.0,
+        help="Std dev threshold for depth-based foreground filtering (default: 2.0)",
+    )
+    parser.add_argument(
         "--skip-vggt",
         action="store_true",
         help="Skip VGGT (use existing point cloud from output-dir)",
@@ -595,6 +613,8 @@ def main():
             max_images=args.max_images,
             confidence_threshold=args.confidence_threshold,
             dtype=args.dtype,
+            foreground_mask=args.foreground_mask,
+            foreground_depth_sigma=args.foreground_depth_sigma,
         )
         results["vggt"] = vggt_results
         point_cloud_path = Path(vggt_results["point_cloud_path"])
