@@ -1,0 +1,62 @@
+#!/bin/bash
+#SBATCH -J openvla-infer
+#SBATCH -p debug
+#SBATCH --gres=gpu:2
+#SBATCH -c 4
+#SBATCH --mem=32G
+#SBATCH --time=01:00:00
+#SBATCH -o logs/infer-%j.out
+#SBATCH -e logs/infer-%j.err
+
+echo "JOB_ID=$SLURM_JOB_ID"
+hostname
+nvidia-smi
+
+# ─── 作業ディレクトリ ──────────────────────────────────────────────────────────
+cd /home/team-002/openvla-sim
+
+# ─── ログディレクトリ作成 ──────────────────────────────────────────────────────
+mkdir -p logs
+
+# ─── 仮想環境のセットアップ ────────────────────────────────────────────────────
+if [ ! -d ".venv" ]; then
+  python -m venv .venv
+fi
+source .venv/bin/activate
+
+# ─── 依存パッケージのインストール ─────────────────────────────────────────────
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128 --quiet
+pip install "transformers==4.44.0" peft accelerate tensorboard Pillow scipy "timm>=0.9.10,<1.0.0" --quiet
+pip install -e openvla-sim/third_party/Genesis --quiet
+# ─── ANSIカラー無効化（ログ崩れ防止）─────────────────────────────────────────
+export TERM=dumb
+export NO_COLOR=1
+
+# ─── GPU 設定（1台使用）────────────────────────────────────────────────────────
+export CUDA_VISIBLE_DEVICES=0,1
+
+# ─── ヘッドレスOpenGLレンダリング設定（ディスプレイなし環境用）────────────────
+export PYOPENGL_PLATFORM=egl
+export EGL_DEVICE_ID=0
+
+# ─── 引数設定 ─────────────────────────────────────────────────────────────────
+CKPT_DIR="${CKPT_DIR:-checkpoints_v3/drone_openvla/best}"
+INSTRUCTION="${INSTRUCTION:-ソファに近づけ}"
+OUTPUT="${OUTPUT:-logs/infer-${SLURM_JOB_ID}.mp4}"
+MAX_STEPS="${MAX_STEPS:-300}"
+
+# ─── OpenVLA 推論実行 ──────────────────────────────────────────────────────────
+echo "------- OpenVLA Infer Start -------"
+echo "  CKPT_DIR   : $CKPT_DIR"
+echo "  INSTRUCTION: $INSTRUCTION"
+echo "  OUTPUT     : $OUTPUT"
+echo "  MAX_STEPS  : $MAX_STEPS"
+python openvla-sim/scripts/infer.py \
+  --ckpt_dir "$CKPT_DIR" \
+  --instruction "$INSTRUCTION" \
+  --output "$OUTPUT" \
+  --max_steps "$MAX_STEPS"
+EXIT_CODE=$?
+
+echo "------- OpenVLA Infer End (exit=$EXIT_CODE) -------"
+exit $EXIT_CODE

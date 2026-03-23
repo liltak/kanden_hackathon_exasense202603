@@ -17,7 +17,7 @@ cd /home/team-002/openvla-sim
 
 # ─── ログ・出力ディレクトリ作成 ───────────────────────────────────────────────
 mkdir -p logs
-mkdir -p checkpoints/drone_openvla
+mkdir -p checkpoints_v3/drone_openvla
 
 # ─── 仮想環境のセットアップ ────────────────────────────────────────────────────
 if [ ! -d ".venv" ]; then
@@ -33,15 +33,25 @@ pip install -e third_party/Genesis --quiet
 # ─── GPU 設定（2台使用）────────────────────────────────────────────────────────
 export CUDA_VISIBLE_DEVICES=0,1
 
+# ─── 学習パラメータ ────────────────────────────────────────────────────────────
+DATASET="dataset_v2"
+CHECKPOINT="checkpoints_v3/drone_openvla"
+MODEL="openvla/openvla-7b"
+EPOCHS=15
+LORA_RANK=32
+BATCH_SIZE=16
+GRAD_ACCUM=1
+LR=5e-4
+
 # ─── 学習実行 ─────────────────────────────────────────────────────────────────
-torchrun --nproc_per_node=2 \
+torchrun --nproc_per_node=1 \
   openvla-sim/scripts/train.py \
-  --data dataset \
-  --out checkpoints/drone_openvla \
-  --model openvla/openvla-7b \
-  --epochs 10 \
-  --lora_rank 8 \
-  --batch_size 1 \
-  --grad_accum 8 \
-  --lr 2e-4 \
+  --data       "$DATASET" \
+  --out        "$CHECKPOINT" \
+  --model      "$MODEL" \
+  --epochs     $EPOCHS \
+  --lora_rank  $LORA_RANK \
+  --batch_size $BATCH_SIZE \
+  --grad_accum $GRAD_ACCUM \
+  --lr         $LR \
   --bf16

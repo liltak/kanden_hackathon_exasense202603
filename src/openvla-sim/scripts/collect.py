@@ -60,6 +60,11 @@ ACTION_DIM = 4
 # 成功判定: ターゲットまでの距離 (m)
 SUCCESS_DIST = 1.5
 
+# データ収集周波数 (Hz) ― シミュレーターは 100Hz なので 10 ステップに 1 回記録
+CONTROL_HZ = 10
+SIM_HZ = 100
+RECORD_INTERVAL = SIM_HZ // CONTROL_HZ  # = 10
+
 
 def to_np(t):
     return t.cpu().numpy().flatten() if hasattr(t, "cpu") else np.array(t).flatten()
@@ -87,7 +92,7 @@ class PIDController:
 
 
 def collect(args):
-    gs.init(backend=gs.cpu)
+    gs.init(backend=gs.cpu, logging_level="debug")
 
     scene = gs.Scene(
         sim_options=gs.options.SimOptions(dt=0.01, substeps=4, gravity=(0, 0, -9.81)),
@@ -203,19 +208,24 @@ def collect(args):
         success = False
 
         # ── ステップループ ──
+        hover_step_count = 0  # 到達後のホバーステップ数（記録単位）
         while step < args.max_steps:
-            # PID で速度計算
-            vel = pid.compute(current_pos, target_pos, dt)
-            vel = np.array(vel).flatten()[:3]
-            vx, vy, vz = vel[0], vel[1], vel[2]
+            if success:
+                # ターゲット到達後はホバー（速度・ヨーレートをゼロに）
+                vx, vy, vz, yaw_rate = 0.0, 0.0, 0.0, 0.0
+            else:
+                # PID で速度計算
+                vel = pid.compute(current_pos, target_pos, dt)
+                vel = np.array(vel).flatten()[:3]
+                vx, vy, vz = vel[0], vel[1], vel[2]
 
-            # ヨーをターゲット方向に向ける
-            dx = target_pos[0] - current_pos[0]
-            dy = target_pos[1] - current_pos[1]
-            target_yaw = np.arctan2(dy, dx) - np.pi / 2
-            yaw_error  = target_yaw - current_yaw
-            yaw_error  = (yaw_error + np.pi) % (2 * np.pi) - np.pi
-            yaw_rate   = np.clip(yaw_error * 3.0, -1.5, 1.5)
+                # ヨーをターゲット方向に向ける
+                dx = target_pos[0] - current_pos[0]
+                dy = target_pos[1] - current_pos[1]
+                target_yaw = np.arctan2(dy, dx) - np.pi / 2
+                yaw_error  = target_yaw - current_yaw
+                yaw_error  = (yaw_error + np.pi) % (2 * np.pi) - np.pi
+                yaw_rate   = np.clip(yaw_error * 3.0, -1.5, 1.5)
             current_yaw += yaw_rate * dt
 
             # 位置更新
@@ -240,47 +250,56 @@ def collect(args):
 
             scene.step()
 
-            # 画像取得
-            render_out = fpv_cam.render(rgb=True)
-            img = render_out[0] if isinstance(render_out, (tuple, list)) else render_out
-            img = np.array(img, dtype=np.uint8)
-
             # 成功判定
             dist_to_target = np.linalg.norm(current_pos - target_pos)
             reached = dist_to_target < SUCCESS_DIST
-            is_last = reached or (step == args.max_steps - 1)
 
-            # 画像保存 (JPG)
-            img_filename = f"step_{global_step_id:06d}.jpg"
-            PILImage.fromarray(img).save(steps_dir / img_filename, quality=95)
+            # 10Hz でのみ記録 (RECORD_INTERVAL ステップに 1 回)
+            if step % RECORD_INTERVAL == 0:
+                # 画像取得
+                render_out = fpv_cam.render(rgb=True)
+                img = render_out[0] if isinstance(render_out, (tuple, list)) else render_out
+                img = np.array(img, dtype=np.uint8)
 
-            # ワールド座標系 → ドローンボディフレームに変換
-            yaw_rot_inv = ScipyRot.from_euler("z", -current_yaw)
-            vel_body = yaw_rot_inv.apply(np.array([vx, vy, vz]))
-            action_4d = [
-                float(vel_body[0]),  # vx_body: 機首方向
-                float(vel_body[1]),  # vy_body: 機体左方向
-                float(vel_body[2]),  # vz_body: 上方向
-                float(yaw_rate),     # yaw_rate
-            ]
+                is_last = reached or (step == args.max_steps - 1)
 
-            episode_steps.append({
-                "step_id":       global_step_id,
-                "episode_id":    episode_count,
-                "image_path":    f"steps/{img_filename}",
-                "instruction":   instruction,
-                "action_vector": action_4d,
-                "is_first":      step == 0,
-                "is_last":       bool(is_last),
-                "is_terminal":   bool(reached),
-            })
+                # 画像保存 (JPG)
+                img_filename = f"step_{global_step_id:06d}.jpg"
+                PILImage.fromarray(img).save(steps_dir / img_filename, quality=95)
 
-            global_step_id += 1
+                # ワールド座標系 → ドローンボディフレームに変換
+                yaw_rot_inv = ScipyRot.from_euler("z", -current_yaw)
+                vel_body = yaw_rot_inv.apply(np.array([vx, vy, vz]))
+                action_4d = [
+                    float(vel_body[0]),  # vx_body: 機首方向
+                    float(vel_body[1]),  # vy_body: 機体左方向
+                    float(vel_body[2]),  # vz_body: 上方向
+                    float(yaw_rate),     # yaw_rate
+                ]
+
+                episode_steps.append({
+                    "step_id":       global_step_id,
+                    "episode_id":    episode_count,
+                    "image_path":    f"steps/{img_filename}",
+                    "instruction":   instruction,
+                    "action_vector": action_4d,
+                    "is_first":      step == 0,
+                    "is_last":       bool(is_last),
+                    "is_terminal":   bool(reached),
+                })
+
+                if success:
+                    hover_step_count += 1
+
+                global_step_id += 1
+
             step += 1
 
-            if reached:
+            if reached and not success:
                 success = True
                 success_count += 1
+
+            if success and hover_step_count >= args.hover_steps:
                 break
 
         # ── エピソード保存 ──
@@ -321,6 +340,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps",   type=int,  default=300,       help="1エピソードの最大ステップ数")
     parser.add_argument("--img_size",    type=int,  default=224,       help="画像解像度 (推奨: 224)")
     parser.add_argument("--out",         type=str,  default="dataset", help="保存先ディレクトリ")
+    parser.add_argument("--hover_steps",  type=int,  default=5,        help="到達後にホバーする記録ステップ数")
     parser.add_argument("--show_viewer", action="store_true",          help="ビューアを表示する")
     args = parser.parse_args()
     collect(args)

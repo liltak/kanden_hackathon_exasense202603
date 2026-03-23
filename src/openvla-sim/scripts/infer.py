@@ -5,16 +5,20 @@ VLA 推論スクリプト (infer.py) ― OpenVLA 7B LoRA
 
 使い方:
   python infer.py --ckpt_dir checkpoints/drone_openvla/best --instruction "ソファに近づけ"
+  python infer.py --ckpt_dir checkpoints/drone_openvla/best --output output.mp4 --max_steps 300
 """
 
 import os
+import sys
 
 import argparse
 import numpy as np
 from scipy.spatial.transform import Rotation as ScipyRot
 import torch
-import genesis as gs
 from PIL import Image as PILImage
+
+sys.path.insert(0, os.path.dirname(__file__))
+from action_tokenizer import ActionTokenizer
 
 OBJECTS_DIR = os.path.join(os.path.dirname(__file__), "..", "objects")
 
@@ -25,11 +29,17 @@ OBJECTS = {
 }
 
 IMG_SIZE = 224
-MAX_VEL  = 1.5
+VIDEO_SIZE = 640  # 動画録画用解像度
+VIDEO_FPS = 30
+
+# 制御周波数 (Hz) ― シミュレーターは 100Hz なので 10 ステップに 1 回推論
+CONTROL_HZ = 10
+SIM_HZ = 100
+INFER_INTERVAL = SIM_HZ // CONTROL_HZ  # = 10
 
 
 def load_model(ckpt_dir: str, device: torch.device):
-    """LoRA アダプターを読み込んで OpenVLA モデルを返す"""
+    """LoRA アダプターと ActionTokenizer を読み込んで返す"""
     from transformers import AutoProcessor, AutoModelForVision2Seq
     from peft import PeftModel
 
@@ -38,71 +48,62 @@ def load_model(ckpt_dir: str, device: torch.device):
         "openvla/openvla-7b",
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
-        device_map="auto",
+        device_map={"": device},
         low_cpu_mem_usage=True,
     )
     model = PeftModel.from_pretrained(base_model, ckpt_dir)
     model.eval()
+
+    stats_path = os.path.join(ckpt_dir, "action_stats.npz")
+    action_tokenizer = ActionTokenizer.load(stats_path)
     print(f"モデル読み込み完了: {ckpt_dir}")
-    return model, processor
+    print(f"ActionTokenizer: {action_tokenizer}")
+    return model, processor, action_tokenizer
 
 
-def predict_action(model, processor, pil_image, instruction: str, device) -> np.ndarray:
+def predict_action(model, processor, pil_image, instruction: str, device, action_tokenizer: ActionTokenizer) -> np.ndarray:
     """画像と命令からアクション 4D を予測して numpy で返す [vx, vy, vz, yaw_rate]"""
     inputs = processor(
         text=instruction,
         images=pil_image,
         return_tensors="pt",
-    ).to(device)
+    ).to(device=device, dtype=torch.bfloat16)
 
     with torch.no_grad():
         generated_ids = model.generate(
             **inputs,
-            max_new_tokens=32,
+            max_new_tokens=16,
             do_sample=False,
         )
 
-    # 生成トークン → テキスト → float リスト
+    # 生成トークン → テキスト → 256bin デコード → 連続値
     generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-    tokens = generated_text.split()
-
-    # 末尾の 4 つを数値として取得（生成テキストは instruction + action）
-    action_4d = np.zeros(4, dtype=np.float32)
-    num_tokens = []
-    for t in reversed(tokens):
-        try:
-            num_tokens.insert(0, float(t))
-            if len(num_tokens) == 4:
-                break
-        except ValueError:
-            if num_tokens:
-                break
-
-    for i, v in enumerate(num_tokens[:4]):
-        action_4d[i] = v
-
-    return action_4d
+    return action_tokenizer.decode(generated_text)
 
 
 def infer(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+    os.environ.setdefault("EGL_DEVICE_ID", "0")
+    print(f"[ENV] PYOPENGL_PLATFORM = {os.environ['PYOPENGL_PLATFORM']}")
+    print(f"[ENV] EGL_DEVICE_ID     = {os.environ['EGL_DEVICE_ID']}")
+
+    import genesis as gs
+
+    device = torch.device("cuda:1" if torch.cuda.device_count() > 1 else "cuda" if torch.cuda.is_available() else "cpu")
 
     # モデル読み込み
-    model, processor = load_model(args.ckpt_dir, device)
+    model, processor, action_tokenizer = load_model(args.ckpt_dir, device)
+
+    # 動画保存モード: ヘッドレスで実行
+    save_video = args.output is not None
 
     # Genesis セットアップ
-    gs.init(backend=gs.cpu)
+    gs.init(backend=gs.cpu, logging_level="debug")
     scene = gs.Scene(
         sim_options=gs.options.SimOptions(dt=0.01, substeps=4, gravity=(0, 0, -9.81)),
-        viewer_options=gs.options.ViewerOptions(
-            camera_pos=(0.0, -4.0, 2.0),
-            camera_lookat=(0.0, 0.0, 0.5),
-            camera_fov=45,
-            max_FPS=60,
-        ),
         vis_options=gs.options.VisOptions(show_world_frame=False),
-        show_viewer=True,
-        show_FPS=True,
+        show_viewer=False,
+        show_FPS=False,
     )
 
     scene.add_entity(gs.morphs.Plane())
@@ -124,68 +125,96 @@ def infer(args):
         gs.morphs.Drone(file="urdf/drones/cf2x.urdf", pos=(0.0, 0.0, 0.5)),
         material=gs.materials.Rigid(gravity_compensation=1.0),
     )
-    scene.viewer.follow_entity(drone)
 
+    # 推論用カメラ (224px)
     fpv_cam = scene.add_camera(
         res=(IMG_SIZE, IMG_SIZE),
         pos=(0.0, 0.1, 0.52),
         lookat=(0.0, 1.0, 0.52),
         fov=90,
-        GUI=True,
+        GUI=False,
+    )
+
+    # 動画録画用カメラ (640px)
+    video_cam = scene.add_camera(
+        res=(VIDEO_SIZE, VIDEO_SIZE),
+        pos=(0.0, 0.1, 0.52),
+        lookat=(0.0, 1.0, 0.52),
+        fov=90,
+        GUI=False,
     )
 
     scene.build()
 
+    if save_video:
+        os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+        video_cam.start_recording()
+        print(f"動画保存先: {args.output}  ({args.max_steps} ステップ, {VIDEO_FPS} FPS)")
+
     hover_rpm = float(np.sqrt(drone.get_mass() * 9.81 / (4 * drone.KF)))
 
     print(f"\n命令: 「{args.instruction}」")
-    print("推論開始... (ESC で終了)\n")
+    print("推論開始...\n")
 
     current_pos = np.array([0.0, 0.0, 0.5])
     current_yaw = 0.0
     dt = scene.sim_options.dt
+    last_action = np.zeros(4, dtype=np.float32)
 
-    while scene.viewer.is_alive():
-        # FPV 画像取得
-        fwd = ScipyRot.from_euler("z", current_yaw).apply([0., 1., 0.])
-        up  = np.array([0., 0., 1.])
-        fpv_cam.set_pose(
-            pos    = current_pos + up * 0.05,
-            lookat = current_pos + fwd * 3.0,
-            up     = up,
-        )
-        render_out = fpv_cam.render(rgb=True)
-        img_raw = render_out[0] if isinstance(render_out, (tuple, list)) else render_out
+    step = 0
+    try:
+        while save_video and step < args.max_steps:
+            yaw_rot = ScipyRot.from_euler("z", current_yaw)
+            up  = np.array([0., 0., 1.])
+            fwd = yaw_rot.apply([0., 1., 0.])
+            cam_pos    = current_pos + up * 0.05
+            cam_lookat = current_pos + fwd * 3.0
 
-        # OpenVLA 用に PIL Image に変換
-        pil_image = PILImage.fromarray(np.array(img_raw, dtype=np.uint8))
+            # 動画カメラは毎ステップ更新・録画
+            video_cam.set_pose(pos=cam_pos, lookat=cam_lookat, up=up)
+            video_cam.render()
 
-        # モデル推論 → 4D アクション [vx, vy, vz, yaw_rate]
-        action_4d = predict_action(model, processor, pil_image, args.instruction, device)
+            # 10Hz でのみ推論 (INFER_INTERVAL ステップに 1 回)
+            if step % INFER_INTERVAL == 0:
+                fpv_cam.set_pose(pos=cam_pos, lookat=cam_lookat, up=up)
+                render_out = fpv_cam.render(rgb=True)
+                img_raw = render_out[0] if isinstance(render_out, (tuple, list)) else render_out
+                pil_image = PILImage.fromarray(np.array(img_raw, dtype=np.uint8))
+                last_action = predict_action(model, processor, pil_image, args.instruction, device, action_tokenizer)
 
-        vx_body  = float(np.clip(action_4d[0], -MAX_VEL, MAX_VEL))
-        vy_body  = float(np.clip(action_4d[1], -MAX_VEL, MAX_VEL))
-        vz_body  = float(np.clip(action_4d[2], -MAX_VEL, MAX_VEL))
-        yaw_rate = float(np.clip(action_4d[3], -1.5, 1.5))
+            action = last_action
+            vx_body  = float(action[0])
+            vy_body  = float(action[1])
+            vz_body  = float(action[2])
+            yaw_rate = float(action[3])
+            print(f"[ACTION] raw={action} | vx={vx_body:.3f} vy={vy_body:.3f} vz={vz_body:.3f} yaw={yaw_rate:.3f} | pos={current_pos}")
+            current_yaw += yaw_rate * dt
+            yaw_rot = ScipyRot.from_euler("z", current_yaw)
+            vel_world = yaw_rot.apply(np.array([vx_body, vy_body, vz_body]))
 
-        # ボディフレーム → ワールド座標系に変換して位置更新
-        current_yaw += yaw_rate * dt
-        yaw_rot = ScipyRot.from_euler("z", current_yaw)
-        vel_world = yaw_rot.apply(np.array([vx_body, vy_body, vz_body]))
-        current_pos = current_pos + vel_world * dt
-        current_pos[2] = max(0.15, current_pos[2])
+            current_pos = current_pos + vel_world * dt
+            current_pos[2] = max(0.15, current_pos[2])
+            drone.set_pos(current_pos.tolist())
+            q = yaw_rot.as_quat()
+            drone.set_quat([q[3], q[0], q[1], q[2]])
+            drone.set_propellels_rpm([hover_rpm] * 4)
+            scene.step()
+            step += 1
 
-        drone.set_pos(current_pos.tolist())
-        q = yaw_rot.as_quat()
-        drone.set_quat([q[3], q[0], q[1], q[2]])
-        drone.set_propellels_rpm([hover_rpm] * 4)
+            if step % 50 == 0:
+                print(f"  {step}/{args.max_steps} ステップ完了")
 
-        scene.step()
+    finally:
+        if save_video:
+            video_cam.stop_recording(save_to_filename=args.output, fps=VIDEO_FPS)
+            print(f"\n動画保存完了: {args.output} ({step} フレーム)")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt_dir",    type=str, required=True,           help="LoRA チェックポイントディレクトリ")
     parser.add_argument("--instruction", type=str, default="ソファに近づけ", help="言語命令")
+    parser.add_argument("--output",      type=str, default=None,            help="動画保存パス (.mp4)。指定するとヘッドレスで動画保存")
+    parser.add_argument("--max_steps",   type=int, default=300,             help="動画保存モード時の最大ステップ数")
     args = parser.parse_args()
     infer(args)

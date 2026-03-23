@@ -1,62 +1,19 @@
 # openvla-sim
 
 Genesis シミュレーターを使ったドローン VLA（Vision-Language-Action）の学習・推論パイプライン。
-**OpenVLA 7B LoRA ファインチューニング**でドローンナビゲーションを学習する。
+**OpenVLA 7B LoRA ファインチューニング**で自然言語命令によるドローンナビゲーションを学習する。
 
-## セットアップ（H100 / Ubuntu）
+## 概要
 
-### 1. venv を作成してアクティベート
-
-```bash
-cd ~/projects/kanden_hackathon_exasense/src/openvla-sim
-
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-### 2. PyTorch（CUDA対応版）をインストール
-
-```bash
-# CUDA 12.8 の場合（H100 推奨）
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-
-# CUDA バージョンを確認したい場合
-nvcc --version
-```
-
-### 3. ライブラリをインストール
-
-```bash
-# Genesis 依存 + OpenVLA 学習用
-pip install numpy scipy Pillow
-pip install transformers peft accelerate wandb
-pip install -e third_party/Genesis
-```
-
-### 4. 動作確認
-
-```bash
-python -c "import torch; print(torch.cuda.is_available())"  # True になること
-python -c "import genesis"                                    # エラーなければOK
-python -c "import transformers; print(transformers.__version__)"
-```
-
----
-
-## 構成
+室内環境に配置された3Dオブジェクト（ソファ・アームチェア・引き出し）を Genesis でシミュレーションし、
+FPVカメラ画像と自然言語命令（例：「ソファに近づけ」）からドローン制御アクションを出力するモデルを学習する。
 
 ```
-scripts/
-  collect.py   # データ収集（Mac / H100）
-  train.py     # OpenVLA 7B LoRA ファインチューニング（H100必須）
-  infer.py     # 推論・自律飛行確認（H100必須）
-objects/       # 3Dオブジェクト (.glb)
-third_party/   # Genesis シミュレーター
+collect.py → train.py → infer.py
+ データ収集    LoRAファインチューニング  自律飛行推論
 ```
 
-## アクション形式
-
-7次元・OpenVLA 互換（先頭4次元がドローン制御）：
+アクション形式（7次元・OpenVLA 互換）：
 
 | インデックス | 内容 | 単位 |
 |---|---|---|
@@ -64,174 +21,157 @@ third_party/   # Genesis シミュレーター
 | 1 `vy_body` | 機体左方向の速度 | m/s |
 | 2 `vz_body` | 上方向の速度 | m/s |
 | 3 `yaw_rate` | ヨー角速度（回転） | rad/s |
-| 4〜6 | ゼロ埋め（OpenVLA 互換用） | - |
-
-## 実行手順
-
-```bash
-# 1. データ収集（Mac でも実行可能）
-python scripts/collect.py --episodes 500 --out scripts/dataset/
-
-# 2. OpenVLA 7B LoRA ファインチューニング（H100）
-torchrun --nproc_per_node=1 scripts/train.py \
-  --data scripts/dataset/ \
-  --out scripts/checkpoints/drone_openvla \
-  --epochs 5 \
-  --lora_rank 8 \
-  --bf16
-
-# 3. 推論・自律飛行確認（H100）
-python scripts/infer.py \
-  --ckpt_dir scripts/checkpoints/drone_openvla/best \
-  --instruction "ソファに近づけ"
-```
+| 4〜6 | ゼロ埋め（OpenVLA 互換用） | — |
 
 ---
 
-## H100 から手元PCに映像を映す方法
+## セットアップ
 
-Genesis のビューアは OpenGL を使うため、H100 サーバーから手元 PC に映像を転送する必要がある。
-用途に応じて以下の3つの方法から選ぶ。
+### 実行環境
 
----
-
-### 方法1：X11 フォワーディング（最もシンプル）
-
-SSH 接続時に `-X` または `-Y` フラグを付けるだけで、GUIウィンドウがそのまま手元PCに表示される。
-
-```bash
-# 手元PCのターミナルから接続
-ssh -X h100
-# または（信頼済みサーバーなら -Y の方が高速）
-ssh -Y h100
-
-# 接続後、通常通り実行
-python scripts/infer.py \
-  --ckpt_dir scripts/checkpoints/drone_openvla/best \
-  --instruction "ソファに近づけ"
-```
-
-**メリット**: 設定不要、コード変更なし
-**デメリット**: ネットワーク遅延で重い場合がある。Macの場合は [XQuartz](https://www.xquartz.org/) のインストールが必要。
-
-```bash
-# Mac の場合、事前に XQuartz をインストール
-brew install --cask xquartz
-# インストール後、一度ログアウト・ログインしてから ssh -X で接続
-```
-
----
-
-### 方法2：動画ファイルとして保存 → scp で転送（推奨）
-
-ヘッドレスでレンダリングし、MP4として保存してから手元PCに転送する。
-
-```python
-# scene の show_viewer=False に変更
-scene = gs.Scene(
-    ...
-    show_viewer=False,   # ← headless
-    ...
-)
-
-# FPVカメラの記録を開始
-fpv_cam.start_recording()
-
-# メインループ（既存コードのまま）
-while True:
-    ...
-    scene.step()
-
-# 終了時に保存
-fpv_cam.stop_recording(save_to="output.mp4", fps=30)
-```
-
-```bash
-# 手元PCのターミナルから転送
-scp h100:~/projects/kanden_hackathon_exasense/src/openvla-sim/scripts/output.mp4 ~/Downloads/
-```
-
-**メリット**: 品質が高い、ネットワーク帯域を消費しない
-**デメリット**: リアルタイムに見えない（事後確認）
-
----
-
-### 方法3：VNC（リアルタイム・高品質）
-
-```bash
-# H100 側：VNC サーバーを起動（初回のみ設定）
-vncserver :1 -geometry 1920x1080 -depth 24
-
-# 手元PC側：SSH ポートフォワードでトンネリング
-ssh -L 5901:localhost:5901 h100
-
-# Mac: Finder → 移動 → サーバへ接続 → vnc://localhost:5901
-```
-
----
-
-### 方法の選び方
-
-| 状況 | 推奨方法 |
+| 項目 | バージョン |
 |---|---|
-| とりあえず動作確認したい | **方法1**（X11フォワーディング） |
-| 学習後の結果を動画で残したい | **方法2**（動画保存） |
-| リアルタイムで操作しながら確認したい | **方法3**（VNC） |
+| OS | Ubuntu 22.04 |
+| Python | 3.10+ |
+| CUDA | 12.1 |
+| GPU | NVIDIA H100 (VRAM 80GB) |
+| PyTorch | 2.x (CUDA 12.1 対応) |
+
+### インストール
+
+```bash
+cd openvla-sim
+
+# 1. venv を作成してアクティベート
+python -m venv .venv
+source .venv/bin/activate
+
+# 2. PyTorch（CUDA 12.1 対応版）をインストール
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# 3. 依存ライブラリをインストール
+pip install "transformers==4.44.0" peft accelerate tensorboard Pillow scipy "timm>=0.9.10,<1.0.0"
+pip install -e third_party/Genesis
+
+# 4. 動作確認
+python -c "import torch; print(torch.cuda.is_available())"  # True になること
+python -c "import genesis"                                    # エラーなければOK
+```
+
+---
+
+## 使用方法
+
+### ディレクトリ構成
+
+```
+scripts/
+  collect.py           # データ収集（Genesis シミュレーター）
+  train.py             # OpenVLA 7B LoRA ファインチューニング（H100必須）
+  infer.py             # 推論・自律飛行確認（H100必須）
+  action_tokenizer.py  # アクションのトークナイザ
+  convert_to_rlds.py   # RLDS形式への変換
+objects/               # 3Dオブジェクト (.glb)
+third_party/Genesis/   # Genesis シミュレーター
+train_slurm.sh         # Slurm ジョブスクリプト（学習）
+infer_slurm.sh         # Slurm ジョブスクリプト（推論）
+```
+
+### 1. データ収集
+
+```bash
+python scripts/collect.py --episodes 5000 --out dataset/
+```
+
+### 2. LoRA ファインチューニング（H100）
+
+```bash
+torchrun --nproc_per_node=1 scripts/train.py \
+  --data       dataset/ \
+  --out        checkpoints/drone_openvla \
+  --model      openvla/openvla-7b \
+  --epochs     15 \
+  --lora_rank  32 \
+  --batch_size 16 \
+  --lr         5e-4 \
+  --bf16
+```
+
+Slurm を使う場合：
+
+```bash
+sbatch train_slurm.sh
+tail -f logs/slurm-<JOB_ID>.out
+```
+
+### 3. 推論・自律飛行確認
+
+```bash
+python scripts/infer.py \
+  --ckpt_dir checkpoints/drone_openvla/best \
+  --instruction "ソファに近づけ"
+```
 
 ---
 
 ## 学習 loss の確認方法
 
-### 方法1：ターミナル出力（追加設定なし）
+### ターミナル出力（追加設定なし）
 
-train.py は **10ステップごと**に loss を表示する：
+`train.py` は 10 ステップごとに loss を表示する：
 
 ```
-Epoch 1/5 | Step 10 | Loss: 2.3451 | LR: 2.00e-04
-Epoch 1/5 | Step 20 | Loss: 1.8923 | LR: 1.98e-04
+Epoch 1/15 | Step 10 | Loss: 2.3451 | LR: 5.00e-04
 ...
 [Epoch 1] Val Loss: 1.7234
 ✓ Best model saved (val_loss=1.7234)
 ```
 
 ```bash
-# バックグラウンド実行しながらログを確認
-nohup torchrun --nproc_per_node=1 scripts/train.py \
-  --data scripts/dataset/ \
-  --out scripts/checkpoints/drone_openvla \
-  --epochs 5 --lora_rank 8 --bf16 > train.log 2>&1 &
-
+# バックグラウンド実行しながら確認
+nohup torchrun --nproc_per_node=1 scripts/train.py ... > train.log 2>&1 &
 tail -f train.log
 ```
 
----
-
-### 方法2：wandb（クラウドで確認・最も手軽）
-
-train.py は wandb を標準サポート。
+### tensorboard
 
 ```bash
-pip install wandb
-wandb login  # 初回のみ：APIキーを入力（https://wandb.ai/authorize で取得）
+tensorboard --logdir checkpoints/drone_openvla --port 6006
+# SSH ポートフォワード: ssh -L 6006:localhost:6006 h100
 ```
-
-実行時に自動でログが送られる：
-
-```bash
-torchrun --nproc_per_node=1 scripts/train.py \
-  --data scripts/dataset/ \
-  --out scripts/checkpoints/drone_openvla \
-  --epochs 5 --lora_rank 8 --bf16 \
-  --wandb_project drone_openvla
-```
-
-SSHトンネル不要でそのままブラウザの [wandb.ai](https://wandb.ai) で確認できる。
 
 ---
 
-### 方法の選び方
+## H100 から手元 PC に映像を映す方法
 
-| 状況 | 推奨方法 |
+| 状況 | 方法 |
 |---|---|
-| 設定なしでとりあえず確認 | **方法1**（ターミナル / tail -f） |
-| どこからでも確認したい | **方法2**（wandb） |
+| とりあえず動作確認したい | X11 フォワーディング（`ssh -X h100`） |
+| 学習後の結果を動画で残したい | ヘッドレスで MP4 保存 → `scp` で転送 |
+| リアルタイムで確認したい | VNC（`ssh -L 5901:localhost:5901 h100`） |
+
+---
+
+## 使用データ
+
+| データセット | 用途 | ライセンス | URL |
+|---|---|---|---|
+| Genesis シミュレーター自動生成データ（合成） | LoRA 学習データ（FPV画像 + アクション） | — | — |
+| modern_arm_chair_01_4k.glb（Poly Haven） | 3Dシーン構築 | CC0 1.0 | https://polyhaven.com/a/modern_arm_chair_01 |
+| sofa_02_4k.glb（Poly Haven） | 3Dシーン構築 | CC0 1.0 | https://polyhaven.com/a/sofa_02 |
+| vintage_wooden_drawer_01_4k.glb（Poly Haven） | 3Dシーン構築 | CC0 1.0 | https://polyhaven.com/a/vintage_wooden_drawer_01 |
+
+---
+
+## 使用モデル
+
+| モデル名 | 用途 | ライセンス | 利用規約 URL |
+|---|---|---|---|
+| openvla/openvla-7b | LoRA ファインチューニングのベースモデル | MIT License | https://huggingface.co/openvla/openvla-7b |
+| Genesis（物理シミュレーター） | 学習データ生成・推論シミュレーション環境 | Apache 2.0 | https://github.com/Genesis-Embodied-AI/Genesis |
+
+---
+
+## ライセンス
+
+MIT License
