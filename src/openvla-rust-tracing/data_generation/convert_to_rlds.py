@@ -1,251 +1,141 @@
 """
-RLDS/TFRecord 変換スクリプト (H100 専用)
+データセット検証スクリプト
 
-generate_dataset.py または annotate.py が出力した
-JSON + 画像データを OpenVLA 互換の TFRecord に変換する。
+generate_crack.py が出力した JSON + PNG データが
+training/train.py (CrackTraceDataset) の読み込み形式に
+正しく合致しているか確認する。
 
-【実行環境】H100 (Linux)
-  pip install tensorflow opencv-python numpy
-
-RLDS フォーマット:
-  各 step:
-    steps/observation/image : (224, 224, 3) uint8  JPEG encoded
-    steps/action            : (7,) float32  [Δcol, Δrow, 0, 0, 0, 0, 0]
-    steps/language_instruction : string
-    steps/is_first          : int64 (0/1)
-    steps/is_last           : int64 (0/1)
-    steps/is_terminal       : int64 (0/1)
-
-アクション値の意味:
-  Δcol ∈ {-1, 0, 1}: 列方向の移動量
-  Δrow ∈ {-1, 0, 1}: 行方向の移動量
-  最終ステップ (終端): [0, 0, 0, 0, 0, 0, 0]
-
-使用方法:
-  python convert_to_rlds.py \\
-    --input_dir data/raw \\
-    --output_dir data/rust_rlds \\
-    --split_ratio 0.9
-
-検証:
-  python convert_to_rlds.py --test --output_dir data/rust_rlds
+使い方:
+  python convert_to_rlds.py
+  python convert_to_rlds.py --data data/auto_raw
+  python convert_to_rlds.py --data data/auto_raw --show_stats
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
-from typing import Any
 
-import cv2
 import numpy as np
 
-try:
-    import tensorflow as tf
-    TF_AVAILABLE = True
-except ImportError:
-    TF_AVAILABLE = False
-    print("[WARNING] TensorFlow が見つかりません。")
-    print("  H100:  pip install tensorflow")
 
+def check_dataset(data_dir: Path, show_stats: bool = False) -> bool:
+    """
+    train.py (CrackTraceDataset) が期待するデータ形式を検証する。
 
-# ─── 定数 ─────────────────────────────────────────────────────────────────
-IMAGE_SIZE = 224
-ACTION_DIM = 7
+    期待する構造:
+      data_dir/
+        episodes/episode_XXXX.json   ← episode_id, steps[], source_image
+        patches/episode_XXXX_step_YY.png  ← 224×224 パッチ画像
 
-
-# ─── シリアライズ ─────────────────────────────────────────────────────────
-def _bytes_feature(value: bytes) -> "tf.train.Feature":
-    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
-
-
-def _float_list_feature(value: list[float]) -> "tf.train.Feature":
-    return tf.train.Feature(float_list=tf.train.FloatList(value=value))
-
-
-def _int64_feature(value: int) -> "tf.train.Feature":
-    return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
-
-
-def step_to_example(
-    image_rgb: np.ndarray,
-    action_vector: list[float],
-    instruction: str,
-    is_first: bool,
-    is_last: bool,
-) -> "tf.train.Example":
-    """1 ステップを TFRecord の Example に変換する。"""
-    img_resized = cv2.resize(image_rgb, (IMAGE_SIZE, IMAGE_SIZE))
-    _, img_bytes = cv2.imencode(".jpg", img_resized)
-
-    # action_vector はすでに 7D だが念のため長さを保証する
-    action_7d = list(action_vector) + [0.0] * ACTION_DIM
-    action_7d = action_7d[:ACTION_DIM]
-
-    feature = {
-        "steps/observation/image": _bytes_feature(img_bytes.tobytes()),
-        "steps/action": _float_list_feature([float(v) for v in action_7d]),
-        "steps/language_instruction": _bytes_feature(instruction.encode("utf-8")),
-        "steps/is_first": _int64_feature(int(is_first)),
-        "steps/is_last": _int64_feature(int(is_last)),
-        "steps/is_terminal": _int64_feature(int(is_last)),
-    }
-    return tf.train.Example(features=tf.train.Features(feature=feature))
-
-
-# ─── エピソード読み込み ───────────────────────────────────────────────────
-def load_episodes(input_dir: Path) -> list[dict[str, Any]]:
-    """episodes/*.json を全て読み込む。generate_dataset.py / annotate.py 両対応。"""
-    episode_dir = input_dir / "episodes"
+    各 step に必要なフィールド:
+      patch_path    : str  (patches/ 以下の相対パス)
+      action_vector : list (最低2要素 = [delta_x, delta_y])
+      pixel_x, pixel_y : int (ウェイポイント中心)
+    """
+    episode_dir = data_dir / "episodes"
     if not episode_dir.exists():
-        raise FileNotFoundError(f"エピソードディレクトリが見つかりません: {episode_dir}")
+        print(f"[ERROR] エピソードディレクトリが見つかりません: {episode_dir}")
+        return False
 
-    episodes = []
-    for ep_path in sorted(episode_dir.glob("episode_*.json")):
-        with open(ep_path) as f:
-            episodes.append(json.load(f))
+    episodes = sorted(episode_dir.glob("episode_*.json"))
+    if not episodes:
+        print(f"[ERROR] エピソード JSON が見つかりません: {episode_dir}")
+        return False
 
-    print(f"[convert] {len(episodes)} エピソードを読み込みました: {input_dir}")
-    return episodes
+    print(f"[check] {len(episodes)} エピソードを検証します: {data_dir}")
 
+    n_steps_total = 0
+    n_missing_patch = 0
+    n_missing_action = 0
+    all_actions: list[list[float]] = []
+    errors: list[str] = []
 
-# ─── TFRecord 書き込み ─────────────────────────────────────────────────────
-def write_tfrecord(
-    episodes: list[dict[str, Any]],
-    output_path: Path,
-    dataset_root: Path,
-    split_name: str,
-) -> int:
-    """episodes を 1 つの GZIP TFRecord ファイルに書き込む。ステップ数を返す。"""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    n_steps = 0
-    options = tf.io.TFRecordOptions(compression_type="GZIP")
+    for ep_path in episodes:
+        with open(ep_path, encoding="utf-8") as f:
+            ep = json.load(f)
 
-    with tf.io.TFRecordWriter(str(output_path), options=options) as writer:
-        for ep in episodes:
-            steps = ep.get("steps", [])
-            if not steps:
+        ep_id = ep.get("episode_id", "?")
+        steps = ep.get("steps", [])
+        if not steps:
+            errors.append(f"episode_{ep_id}: steps が空")
+            continue
+
+        for i, step in enumerate(steps):
+            # patch_path チェック（最終ステップは None の場合あり）
+            patch_path_str = step.get("patch_path")
+            if patch_path_str is None:
+                # 最終ステップはパッチなし（train.py でスキップ済み）
                 continue
-            for step in steps:
-                img_path = dataset_root / step["image_path"]
-                img = cv2.imread(str(img_path))
-                if img is None:
-                    print(f"[WARNING] 画像が見つかりません: {img_path} — スキップ")
-                    continue
-                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-                example = step_to_example(
-                    image_rgb=img_rgb,
-                    action_vector=step["action_vector"],
-                    instruction=step["instruction"],
-                    is_first=step.get("is_first", False),
-                    is_last=step.get("is_last", False),
-                )
-                writer.write(example.SerializeToString())
-                n_steps += 1
+            n_steps_total += 1
+            patch_path = data_dir / patch_path_str
+            if not patch_path.exists():
+                n_missing_patch += 1
+                errors.append(f"episode_{ep_id} step_{i}: パッチ画像なし → {patch_path}")
 
-    print(f"[convert] {split_name}: {len(episodes)} ep, {n_steps} steps → {output_path}")
-    return n_steps
+            # action_vector チェック
+            action_vector = step.get("action_vector")
+            if action_vector is None or len(action_vector) < 2:
+                n_missing_action += 1
+                errors.append(f"episode_{ep_id} step_{i}: action_vector が不正 → {action_vector}")
+            else:
+                all_actions.append(action_vector[:2])
 
+            # pixel_x, pixel_y チェック
+            if "pixel_x" not in step or "pixel_y" not in step:
+                errors.append(f"episode_{ep_id} step_{i}: pixel_x/y が欠落")
 
-# ─── 検証 ─────────────────────────────────────────────────────────────────
-def verify_tfrecord(tfrecord_path: Path, n_samples: int = 5) -> None:
-    """TFRecord を読み込んで形式を確認する。"""
-    feature_spec = {
-        "steps/observation/image": tf.io.FixedLenFeature([], tf.string),
-        "steps/action": tf.io.FixedLenFeature([ACTION_DIM], tf.float32),
-        "steps/language_instruction": tf.io.FixedLenFeature([], tf.string),
-        "steps/is_first": tf.io.FixedLenFeature([], tf.int64),
-        "steps/is_last": tf.io.FixedLenFeature([], tf.int64),
-        "steps/is_terminal": tf.io.FixedLenFeature([], tf.int64),
-    }
-    dataset = tf.data.TFRecordDataset(str(tfrecord_path), compression_type="GZIP")
-    errors = []
-    for i, raw in enumerate(dataset.take(n_samples)):
-        try:
-            ex = tf.io.parse_single_example(raw, feature_spec)
-            img = tf.image.decode_jpeg(ex["steps/observation/image"], channels=3)
-            assert img.shape == (IMAGE_SIZE, IMAGE_SIZE, 3), f"shape: {img.shape}"
-            assert ex["steps/action"].shape == (ACTION_DIM,)
-            assert len(ex["steps/language_instruction"].numpy()) > 0
-        except Exception as e:
-            errors.append(f"sample {i}: {e}")
+    # ─── 結果表示 ─────────────────────────────────────────────────────────────
+    print(f"\n{'='*60}")
+    print(f"エピソード数  : {len(episodes)}")
+    print(f"ステップ数    : {n_steps_total}  (train.py に渡るサンプル数)")
+    print(f"欠損パッチ    : {n_missing_patch}")
+    print(f"欠損アクション: {n_missing_action}")
+
+    if all_actions and show_stats:
+        arr = np.array(all_actions, dtype=np.float32)
+        dx, dy = arr[:, 0], arr[:, 1]
+        dists = np.sqrt(dx**2 + dy**2)
+        print(f"\n── アクション統計 (delta_x, delta_y) ──────────────")
+        print(f"  delta_x : min={dx.min():.1f}  max={dx.max():.1f}  mean={dx.mean():.1f}")
+        print(f"  delta_y : min={dy.min():.1f}  max={dy.max():.1f}  mean={dy.mean():.1f}")
+        print(f"  距離    : min={dists.min():.1f}  max={dists.max():.1f}  mean={dists.mean():.1f} px")
+        print(f"\n  → ActionTokenizer の min/max 参考値:")
+        print(f"       action_min = [{dx.min():.1f}, {dy.min():.1f}]")
+        print(f"       action_max = [{dx.max():.1f}, {dy.max():.1f}]")
 
     if errors:
-        for err in errors:
-            print(f"  [ERROR] {err}")
-        raise RuntimeError("検証失敗")
-    print(f"[verify] OK ({n_samples} samples): {tfrecord_path}")
+        print(f"\n── エラー ({len(errors)} 件) ─────────────────────────────")
+        for err in errors[:20]:
+            print(f"  [!] {err}")
+        if len(errors) > 20:
+            print(f"  ... 他 {len(errors)-20} 件")
+        print(f"{'='*60}")
+        return False
+
+    print(f"\n[OK] データセットは train.py (CrackTraceDataset) と互換性があります。")
+    print(f"{'='*60}\n")
+    return True
 
 
-# ─── メイン ──────────────────────────────────────────────────────────────
 def main() -> None:
-    parser = argparse.ArgumentParser(description="JSON+画像 → RLDS TFRecord 変換")
-    parser.add_argument("--input_dir", default="data/raw",
-                        help="generate_dataset.py / annotate.py の出力ディレクトリ")
-    parser.add_argument("--output_dir", default="data/rust_rlds",
-                        help="TFRecord の出力ディレクトリ")
-    parser.add_argument("--split_ratio", type=float, default=0.9,
-                        help="train 割合 (default: 0.9)")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--test", action="store_true",
-                        help="既存 TFRecord の検証のみ実行")
+    parser = argparse.ArgumentParser(description="train.py 向けデータセット検証")
+    parser.add_argument(
+        "--data", type=str, default="data/auto_raw",
+        help="検証するデータディレクトリ (default: data/auto_raw)",
+    )
+    parser.add_argument(
+        "--show_stats", action="store_true",
+        help="アクション統計を表示する",
+    )
     args = parser.parse_args()
 
-    output_dir = Path(args.output_dir)
-
-    if args.test:
-        if not TF_AVAILABLE:
-            print("[ERROR] TensorFlow が必要です。")
-            return
-        for name in ["train", "val"]:
-            p = output_dir / f"{name}.tfrecord.gz"
-            if p.exists():
-                verify_tfrecord(p)
-            else:
-                print(f"[test] 見つかりません: {p}")
-        return
-
-    if not TF_AVAILABLE:
-        print("[ERROR] TensorFlow が必要です: pip install tensorflow")
-        return
-
-    input_dir = Path(args.input_dir)
-    episodes = load_episodes(input_dir)
-
-    # シャッフルして train/val 分割
-    rng = np.random.default_rng(args.seed)
-    indices = rng.permutation(len(episodes)).tolist()
-    n_train = max(1, int(len(episodes) * args.split_ratio))
-    train_eps = [episodes[i] for i in indices[:n_train]]
-    val_eps = [episodes[i] for i in indices[n_train:]] if len(indices) > n_train else []
-
-    print(f"[convert] train={len(train_eps)}, val={len(val_eps)}")
-
-    n_train_steps = write_tfrecord(train_eps, output_dir / "train.tfrecord.gz", input_dir, "train")
-    n_val_steps = 0
-    if val_eps:
-        n_val_steps = write_tfrecord(val_eps, output_dir / "val.tfrecord.gz", input_dir, "val")
-
-    print("\n[検証]")
-    verify_tfrecord(output_dir / "train.tfrecord.gz")
-    if val_eps:
-        verify_tfrecord(output_dir / "val.tfrecord.gz")
-
-    info = {
-        "n_train_episodes": len(train_eps),
-        "n_val_episodes": len(val_eps),
-        "n_train_steps": n_train_steps,
-        "n_val_steps": n_val_steps,
-        "image_size": IMAGE_SIZE,
-        "action_dim": ACTION_DIM,
-        "action_format": "[delta_col, delta_row, 0, 0, 0, 0, 0]",
-        "compression": "GZIP",
-    }
-    with open(output_dir / "dataset_info.json", "w") as f:
-        json.dump(info, f, indent=2, ensure_ascii=False)
-    print(f"\n[convert] 完了 → {output_dir}")
+    data_dir = Path(args.data)
+    ok = check_dataset(data_dir, show_stats=args.show_stats)
+    exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

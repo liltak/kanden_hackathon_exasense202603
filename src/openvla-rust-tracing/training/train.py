@@ -1,205 +1,153 @@
 """
-タスク3: OpenVLA 7B LoRA ファインチューニングスクリプト
+OpenVLA 7B LoRA ファインチューニング ― クラック追従タスク
 
-【実行環境】H100 専用 (Mac では実行不可)
-  理由: OpenVLA 7B は bf16 で約 14GB VRAM が必要。
-        Mac の MPS では速度・メモリ両面で非現実的。
+【実行環境】H100 専用 (bf16, ~14GB VRAM 必要)
 
-  依存 (H100 側でインストール):
-    pip install torch transformers peft accelerate wandb trl
-    pip install tensorflow  # TFRecord 読み込み用
+データ形式: generate_crack.py が出力した JSON エピソード + PNG パッチ画像
+  data/auto_raw/
+    episodes/episode_XXXX.json
+    patches/episode_XXXX_step_YY.png
 
-特徴:
-  - 直近 3〜5 フレームの画像履歴を instruction に埋め込んでバックトラック判断を補助
-  - 探索済みエリアのミニマップをパッチ画像にオーバーレイするオプション
-  - WandB でのロギング
-  - RLDS 形式の TFRecord を直接読み込み
+アクション形式 (2次元):
+  [delta_x, delta_y]  ← 画素単位の移動量 (224×224 パッチ座標系)
 
-使用方法 (H100 上で実行):
-  torchrun --nproc_per_node=1 train.py \
-    --data_dir data/rust_rlds \
-    --output_dir checkpoints/rust_openvla \
-    --model_name_or_path openvla/openvla-7b \
-    --lora_rank 16 \
-    --bf16 \
-    --wandb_project rust_openvla
+命令文: "クラックを追従してください"
+
+使い方 (H100 上で実行):
+  pip install transformers peft accelerate tensorboard
+
+  torchrun --nproc_per_node=1 training/train.py \\
+    --data data/auto_raw \\
+    --out checkpoints/crack_openvla \\
+    --epochs 5 \\
+    --lora_rank 32 \\
+    --bf16
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import random
-from dataclasses import dataclass, field
+import sys
+import time
 from pathlib import Path
-from typing import Optional
 
-import cv2
 import numpy as np
+from PIL import Image as PILImage
 
-# torch / transformers / peft は H100 環境でのみ利用可能。
-# Mac でこのファイルを import してもクラッシュしないよう try/except で保護する。
+# action_tokenizer は同一ディレクトリにある
+sys.path.insert(0, os.path.dirname(__file__))
+from action_tokenizer import ActionTokenizer
+
 try:
     import torch
-    from torch.utils.data import DataLoader, Dataset
+    from torch.utils.data import Dataset, DataLoader
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
 
 from typing import TYPE_CHECKING
-
 if TYPE_CHECKING:
-    import torch
-    from torch.utils.data import DataLoader, Dataset
     from transformers import AutoProcessor, AutoModelForVision2Seq
-    from peft import LoraConfig, get_peft_model, TaskType
+    from peft import LoraConfig, get_peft_model
+
+# 命令文 (固定)
+INSTRUCTION = "クラックを追従してください"
 
 
-# ─── 定数 ─────────────────────────────────────────────────────────────────
-IMAGE_SIZE = 224
-ACTION_DIM = 7          # OpenVLA の出力次元
-RUST_ACTION_DIM = 3     # 実際に使用する次元数
+# ─── データセット ──────────────────────────────────────────────────────────
+class CrackTraceDataset(Dataset):
+    """
+    generate_crack.py が出力した JSON エピソード + PNG パッチ画像を
+    OpenVLA 用に読み込むデータセット。
 
-# OpenVLA のアクション正規化範囲 ([-1, 1] を想定)
-ACTION_NORM_MIN = -1.0
-ACTION_NORM_MAX = 1.0
-
-# ─── RLDS Dataset ────────────────────────────────────────────────────────
-class RLDSRustDataset(Dataset):
-    """TFRecord から読み込む PyTorch Dataset。"""
+    アクション: action_vector[:2] = [delta_x, delta_y] (2D)
+    画像: 各ステップの 224×224 パッチ画像
+    """
 
     def __init__(
         self,
-        tfrecord_path: str,
+        data_dir: str,
         processor=None,
+        action_tokenizer: ActionTokenizer | None = None,
     ) -> None:
-        super().__init__()
+        self.data_dir  = Path(data_dir)
         self.processor = processor
+        self.samples: list[dict] = []
 
-        # TFRecord の全レコードをメモリに展開
-        # 大規模データセットでは streaming が望ましいが、
-        # ハッカソン規模では pre-load で十分
-        self._records = self._load_tfrecord(tfrecord_path)
-        print(f"[RLDSRustDataset] {len(self._records)} ステップを読み込みました。")
+        episode_dir = self.data_dir / "episodes"
+        for ep_path in sorted(episode_dir.glob("episode_*.json")):
+            with open(ep_path, encoding="utf-8") as f:
+                ep = json.load(f)
+            for step in ep.get("steps", []):
+                # patch_path が None（最終ステップ）はスキップ
+                if step.get("patch_path") is None:
+                    continue
+                action_2d = step["action_vector"][:2]  # [delta_x, delta_y]
+                self.samples.append({
+                    "image_path": self.data_dir / step["patch_path"],
+                    "action_2d":  action_2d,
+                })
 
-    def _load_tfrecord(self, path: str) -> list[dict]:
-        """TFRecord を辞書リストに展開する。"""
-        try:
-            import tensorflow as tf
-        except ImportError:
-            raise ImportError("TensorFlow が必要です: pip install tensorflow")
+        n_ep = len(list(episode_dir.glob("episode_*.json")))
+        print(f"データセット: {len(self.samples)} ステップ ({n_ep} エピソード)")
 
-        FEATURE_DESC = {
-            "steps/observation/image": tf.io.FixedLenFeature([], tf.string),
-            "steps/action": tf.io.FixedLenFeature([ACTION_DIM], tf.float32),
-            "steps/language_instruction": tf.io.FixedLenFeature([], tf.string),
-            "steps/is_first": tf.io.FixedLenFeature([], tf.int64),
-            "steps/is_last": tf.io.FixedLenFeature([], tf.int64),
-        }
-
-        dataset = tf.data.TFRecordDataset(path, compression_type="GZIP")
-        records = []
-        for raw in dataset:
-            ex = tf.io.parse_single_example(raw, FEATURE_DESC)
-            img_bytes = ex["steps/observation/image"].numpy()
-            img_arr = tf.image.decode_jpeg(img_bytes, channels=3).numpy()
-            records.append({
-                "image": img_arr,  # (224, 224, 3) uint8 RGB
-                "action": ex["steps/action"].numpy(),
-                "instruction": ex["steps/language_instruction"].numpy().decode("utf-8"),
-                "is_first": bool(ex["steps/is_first"].numpy()),
-                "is_last": bool(ex["steps/is_last"].numpy()),
-            })
-        return records
+        # ActionTokenizer: 渡されなければデータセットから統計を計算
+        if action_tokenizer is not None:
+            self.action_tokenizer = action_tokenizer
+        else:
+            all_actions = [s["action_2d"] for s in self.samples]
+            self.action_tokenizer = ActionTokenizer.from_dataset(all_actions)
+            print(f"ActionTokenizer: {self.action_tokenizer}")
 
     def __len__(self) -> int:
-        return len(self._records)
+        return len(self.samples)
 
     def __getitem__(self, idx: int) -> dict:
-        record = self._records[idx]
-        image = record["image"]  # (224, 224, 3) RGB uint8
-        instruction = record["instruction"]
+        sample = self.samples[idx]
 
-        # アクションをそのまま使用 (7D float)
-        action = record["action"].astype(np.float32)
+        image = PILImage.open(sample["image_path"]).convert("RGB")
+
+        # アクション: 2D → 256bin 離散トークン文字列 (例: "145 109")
+        action_str = self.action_tokenizer.encode(sample["action_2d"])
 
         if self.processor is not None:
-            # OpenVLA の processor で前処理 (numpy → PIL Image に変換)
-            from PIL import Image as PILImage
-            pil_image = PILImage.fromarray(image)
-
-            # アクション値を文字列化 ("1.0000 0.0000 0.0000 ...")
-            action_str = " ".join([f"{v:.4f}" for v in action])
-
-            # 画像+テキスト全体を1回でトークナイズ
             inputs_full = self.processor(
-                text=instruction + " " + action_str,
-                images=pil_image,
+                text=INSTRUCTION + " " + action_str,
+                images=image,
                 return_tensors="pt",
             )
 
-            # action のトークン長をテキストのみで計算（画像処理なし・安価）
             action_token_len = self.processor.tokenizer(
                 action_str, return_tensors="pt"
             )["input_ids"].shape[1]
 
-            # labels: 画像+instruction 部分は -100、action トークンのみ損失計算
             labels = inputs_full["input_ids"].clone()
             labels[:, :-action_token_len] = -100
 
             return {
-                "input_ids": inputs_full["input_ids"].squeeze(0),
+                "input_ids":      inputs_full["input_ids"].squeeze(0),
                 "attention_mask": inputs_full["attention_mask"].squeeze(0),
-                "pixel_values": inputs_full["pixel_values"].squeeze(0),
-                "labels": labels.squeeze(0),
-                "is_first": record["is_first"],
-                "is_last": record["is_last"],
+                "pixel_values":   inputs_full["pixel_values"].squeeze(0),
+                "labels":         labels.squeeze(0),
             }
 
-        # processor なしの場合 (デバッグ用)
         return {
-            "image": torch.from_numpy(image).permute(2, 0, 1).float() / 255.0,
-            "instruction": instruction,
-            "action": torch.tensor(action, dtype=torch.float32),
+            "instruction": INSTRUCTION,
+            "action_str":  action_str,
         }
 
 
-# ─── コールバック・ログ ───────────────────────────────────────────────────
-class WandBLogger:
-    """WandB ロガーのラッパー。"""
-
-    def __init__(self, project: str, name: str, config: dict) -> None:
-        try:
-            import wandb
-            self.run = wandb.init(project=project, name=name, config=config)
-            self.enabled = True
-        except ImportError:
-            print("[WARNING] WandB が見つかりません。ロギングをスキップします。")
-            self.enabled = False
-            self.run = None
-
-    def log(self, metrics: dict, step: int) -> None:
-        if self.enabled and self.run:
-            import wandb
-            wandb.log(metrics, step=step)
-
-    def finish(self) -> None:
-        if self.enabled and self.run:
-            self.run.finish()
-
-
 # ─── LoRA 設定 ────────────────────────────────────────────────────────────
-def get_lora_config(rank: int = 16, alpha: int = 32, dropout: float = 0.05):
-    """OpenVLA 用 LoRA 設定を返す。"""
+def get_lora_config(rank: int = 32, alpha: int = 64, dropout: float = 0.05):
     from peft import LoraConfig, TaskType
     return LoraConfig(
         task_type=TaskType.CAUSAL_LM,
         r=rank,
         lora_alpha=alpha,
         lora_dropout=dropout,
-        # OpenVLA (LLaMA ベース) のターゲットモジュール
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj",
@@ -208,150 +156,136 @@ def get_lora_config(rank: int = 16, alpha: int = 32, dropout: float = 0.05):
     )
 
 
-# ─── 訓練ループ ───────────────────────────────────────────────────────────
+# ─── TensorBoard ロガー ───────────────────────────────────────────────────
+class TensorBoardLogger:
+    def __init__(self, log_dir: str) -> None:
+        try:
+            from torch.utils.tensorboard import SummaryWriter
+            self.writer = SummaryWriter(log_dir=log_dir)
+            self.enabled = True
+            print(f"[TensorBoard] ログ保存先: {log_dir}")
+        except ImportError:
+            print("[WARNING] tensorboard が見つかりません。pip install tensorboard")
+            self.enabled = False
+
+    def log(self, metrics: dict, step: int) -> None:
+        if self.enabled:
+            for key, value in metrics.items():
+                self.writer.add_scalar(key, value, step)
+
+    def finish(self) -> None:
+        if self.enabled:
+            self.writer.close()
+
+
+# ─── 学習 ────────────────────────────────────────────────────────────────
 def train(args: argparse.Namespace) -> None:
-    """メイン訓練ループ。"""
     import torch
     from transformers import AutoProcessor, AutoModelForVision2Seq
     from peft import get_peft_model
     from accelerate import Accelerator
 
-    # Accelerate 初期化
     accelerator = Accelerator(
         mixed_precision="bf16" if args.bf16 else "no",
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        gradient_accumulation_steps=args.grad_accum,
     )
 
-    # WandB
-    wandb_logger = WandBLogger(
-        project=args.wandb_project,
-        name=args.run_name or f"rust_lora_r{args.lora_rank}",
-        config=vars(args),
+    tb_logger = TensorBoardLogger(
+        log_dir=str(Path(args.out) / "tensorboard"),
     ) if accelerator.is_main_process else None
 
-    # モデルとプロセッサの読み込み
-    accelerator.print(f"[train] モデルを読み込み中: {args.model_name_or_path}")
-    processor = AutoProcessor.from_pretrained(
-        args.model_name_or_path,
-        trust_remote_code=True,
-    )
+    accelerator.print(f"[train] モデルを読み込み中: {args.model}")
+    processor = AutoProcessor.from_pretrained(args.model, trust_remote_code=True)
     model = AutoModelForVision2Seq.from_pretrained(
-        args.model_name_or_path,
+        args.model,
         torch_dtype=torch.bfloat16 if args.bf16 else torch.float32,
         trust_remote_code=True,
         device_map="auto",
         low_cpu_mem_usage=True,
-        max_memory={0: "75GiB"},  # CUDA_VISIBLE_DEVICES=1 により GPU1 が device:0 になる
     )
 
-    # LoRA 適用
-    lora_config = get_lora_config(
-        rank=args.lora_rank,
-        alpha=args.lora_alpha,
-        dropout=args.lora_dropout,
-    )
+    lora_config = get_lora_config(rank=args.lora_rank)
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
-
-    # 活性化メモリ削減（gradient checkpointing）
     model.enable_input_require_grads()
     model.gradient_checkpointing_enable()
 
-    # データセット
-    train_dataset = RLDSRustDataset(
-        tfrecord_path=str(Path(args.data_dir) / "train.tfrecord.gz"),
-        processor=processor,
-    )
-    val_dataset = RLDSRustDataset(
-        tfrecord_path=str(Path(args.data_dir) / "val.tfrecord.gz"),
-        processor=processor,
-    )
+    # データセット (ActionTokenizer をデータセットから自動計算)
+    full_dataset = CrackTraceDataset(args.data, processor=processor)
+
+    # train/val 分割 (90/10)
+    n_total = len(full_dataset)
+    n_train = max(1, int(n_total * 0.9))
+    indices = list(range(n_total))
+    random.shuffle(indices)
+    train_indices = indices[:n_train]
+    val_indices   = indices[n_train:]
+
+    from torch.utils.data import Subset
+    train_set = Subset(full_dataset, train_indices)
+    val_set   = Subset(full_dataset, val_indices)
+    accelerator.print(f"train: {len(train_set)}, val: {len(val_set)}")
 
     def collate_fn(batch):
         from torch.nn.utils.rnn import pad_sequence
-        input_ids = pad_sequence(
-            [b["input_ids"] for b in batch],
-            batch_first=True,
-            padding_value=processor.tokenizer.pad_token_id,
-        )
-        attention_mask = pad_sequence(
-            [b["attention_mask"] for b in batch],
-            batch_first=True,
-            padding_value=0,
-        )
-        pixel_values = torch.stack([b["pixel_values"] for b in batch])
-        labels = pad_sequence(
-            [b["labels"] for b in batch],
-            batch_first=True,
-            padding_value=-100,
-        )
         return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "pixel_values": pixel_values,
-            "labels": labels,
+            "input_ids": pad_sequence(
+                [b["input_ids"] for b in batch], batch_first=True,
+                padding_value=processor.tokenizer.pad_token_id,
+            ),
+            "attention_mask": pad_sequence(
+                [b["attention_mask"] for b in batch], batch_first=True, padding_value=0,
+            ),
+            "pixel_values": torch.stack([b["pixel_values"] for b in batch]),
+            "labels": pad_sequence(
+                [b["labels"] for b in batch], batch_first=True, padding_value=-100,
+            ),
         }
 
     train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.per_device_train_batch_size,
-        shuffle=True,
-        num_workers=0,
-        pin_memory=False,
-        collate_fn=collate_fn,
+        train_set, batch_size=args.batch_size, shuffle=True,
+        num_workers=0, collate_fn=collate_fn,
     )
     val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.per_device_eval_batch_size,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=False,
-        collate_fn=collate_fn,
+        val_set, batch_size=args.batch_size, shuffle=False,
+        num_workers=0, collate_fn=collate_fn,
     )
 
-    # オプティマイザ
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.learning_rate,
-        weight_decay=args.weight_decay,
-    )
-
-    # スケジューラ (cosine warmup)
-    total_steps = len(train_loader) * args.num_epochs // args.gradient_accumulation_steps
-    warmup_steps = int(total_steps * args.warmup_ratio)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    total_steps = len(train_loader) * args.epochs // args.grad_accum
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
 
-    # Accelerate でラップ (device_map="auto" 使用時はモデルを除く)
     optimizer, train_loader, val_loader, scheduler = accelerator.prepare(
         optimizer, train_loader, val_loader, scheduler
     )
 
-    # 訓練ループ
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     global_step = 0
     best_val_loss = float("inf")
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    train_start = time.time()
+    steps_per_epoch = len(train_loader)
+    accelerator.print(f"\n学習開始: {args.epochs} エポック | {steps_per_epoch} ステップ/エポック\n")
 
-    for epoch in range(args.num_epochs):
+    for epoch in range(args.epochs):
         model.train()
         train_loss_accum = 0.0
+        epoch_start = time.time()
 
-        for batch_idx, batch in enumerate(train_loader):
+        for step_in_epoch, batch in enumerate(train_loader, 1):
             with accelerator.accumulate(model):
-                input_ids = batch["input_ids"]
-                attention_mask = batch["attention_mask"]
-                pixel_values = batch["pixel_values"].to(torch.bfloat16)
-
-                # OpenVLA の forward (instruction 以降の action 文字列を予測)
                 outputs = model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    pixel_values=pixel_values,
-                    labels=batch["labels"],  # -100 マスク済み action トークン
+                    input_ids=batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    pixel_values=batch["pixel_values"].to(
+                        torch.bfloat16 if args.bf16 else torch.float32
+                    ),
+                    labels=batch["labels"],
                 )
                 loss = outputs.loss
                 accelerator.backward(loss)
-                accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                accelerator.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
@@ -359,124 +293,112 @@ def train(args: argparse.Namespace) -> None:
             train_loss_accum += loss.item()
             global_step += 1
 
-            if global_step % args.logging_steps == 0 and accelerator.is_main_process:
-                avg_loss = train_loss_accum / args.logging_steps
-                lr = scheduler.get_last_lr()[0]
+            if global_step % 10 == 0 and accelerator.is_main_process:
+                avg = train_loss_accum / 10
+                lr  = scheduler.get_last_lr()[0]
+                elapsed = time.time() - train_start
+                steps_total = steps_per_epoch * args.epochs
+                eta_sec = elapsed / global_step * (steps_total - global_step)
+                eta_h, eta_rem = divmod(int(eta_sec), 3600)
+                eta_m = eta_rem // 60
                 accelerator.print(
-                    f"Epoch {epoch+1}/{args.num_epochs} | "
-                    f"Step {global_step} | "
-                    f"Loss: {avg_loss:.4f} | "
-                    f"LR: {lr:.2e}"
+                    f"Epoch {epoch+1}/{args.epochs} | "
+                    f"Step {step_in_epoch}/{steps_per_epoch} | "
+                    f"Loss: {avg:.4f} | LR: {lr:.2e} | "
+                    f"ETA: {eta_h}h {eta_m}m"
                 )
-                if wandb_logger:
-                    wandb_logger.log({
-                        "train/loss": avg_loss,
-                        "train/lr": lr,
-                        "train/epoch": epoch + batch_idx / len(train_loader),
-                    }, step=global_step)
+                if tb_logger:
+                    tb_logger.log({"train/loss": avg, "train/lr": lr}, step=global_step)
                 train_loss_accum = 0.0
 
-        # Validation
-        if (epoch + 1) % args.eval_epochs == 0:
-            model.eval()
-            val_losses = []
-            with torch.no_grad():
-                for batch in val_loader:
-                    outputs = model(
-                        input_ids=batch["input_ids"],
-                        attention_mask=batch["attention_mask"],
-                        pixel_values=batch["pixel_values"].to(torch.bfloat16),
-                        labels=batch["labels"],  # -100 マスク済み action トークン
-                    )
-                    val_losses.append(outputs.loss.item())
+        # バリデーション
+        model.eval()
+        val_losses = []
+        with torch.no_grad():
+            for batch in val_loader:
+                outputs = model(
+                    input_ids=batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    pixel_values=batch["pixel_values"].to(
+                        torch.bfloat16 if args.bf16 else torch.float32
+                    ),
+                    labels=batch["labels"],
+                )
+                val_losses.append(outputs.loss.item())
 
-            val_loss = sum(val_losses) / len(val_losses)
-            accelerator.print(f"[Epoch {epoch+1}] Val Loss: {val_loss:.4f}")
+        val_loss = sum(val_losses) / len(val_losses) if val_losses else float("inf")
+        epoch_time = time.time() - epoch_start
+        epoch_h, epoch_rem = divmod(int(epoch_time), 3600)
+        epoch_m, epoch_s = divmod(epoch_rem, 60)
+        remaining_epochs = args.epochs - (epoch + 1)
+        total_eta_sec = epoch_time * remaining_epochs
+        total_eta_h, total_eta_rem = divmod(int(total_eta_sec), 3600)
+        total_eta_m = total_eta_rem // 60
+        accelerator.print(
+            f"\n{'='*60}\n"
+            f"[Epoch {epoch+1}/{args.epochs}] "
+            f"Val Loss: {val_loss:.4f} | Train Time: {epoch_h}h {epoch_m}m {epoch_s}s\n"
+            f"残り推定: {total_eta_h}h {total_eta_m}m ({remaining_epochs} エポック)\n"
+            f"{'='*60}\n"
+        )
+        if tb_logger:
+            tb_logger.log({"val/loss": val_loss, "epoch_time_min": epoch_time / 60}, step=global_step)
 
-            if wandb_logger:
-                wandb_logger.log({"val/loss": val_loss}, step=global_step)
+        # エポック毎チェックポイント保存
+        if accelerator.is_main_process:
+            epoch_ckpt = out_dir / f"epoch_{epoch+1:04d}"
+            unwrapped_ep = accelerator.unwrap_model(model)
+            unwrapped_ep.save_pretrained(str(epoch_ckpt))
+            processor.save_pretrained(str(epoch_ckpt))
+            full_dataset.action_tokenizer.save(str(epoch_ckpt / "action_stats.npz"))
+            accelerator.print(f"→ Epoch checkpoint saved: {epoch_ckpt}")
 
-            # ベストモデルを保存
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                unwrapped = accelerator.unwrap_model(model)
-                unwrapped.save_pretrained(str(output_dir / "best"))
-                processor.save_pretrained(str(output_dir / "best"))
-                accelerator.print(f"✓ Best model saved (val_loss={val_loss:.4f})")
-
-        # 定期チェックポイント
-        if (epoch + 1) % args.save_epochs == 0:
+        # ベストモデル保存
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             unwrapped = accelerator.unwrap_model(model)
-            ckpt_dir = output_dir / f"checkpoint-epoch{epoch+1}"
-            unwrapped.save_pretrained(str(ckpt_dir))
-            accelerator.print(f"Checkpoint saved: {ckpt_dir}")
+            unwrapped.save_pretrained(str(out_dir / "best"))
+            processor.save_pretrained(str(out_dir / "best"))
+            full_dataset.action_tokenizer.save(str(out_dir / "best" / "action_stats.npz"))
+            accelerator.print(f"✓ Best model saved (val_loss={val_loss:.4f})")
 
-    # 最終モデルを保存
+    # 最終モデル保存
     unwrapped = accelerator.unwrap_model(model)
-    unwrapped.save_pretrained(str(output_dir / "final"))
-    processor.save_pretrained(str(output_dir / "final"))
+    unwrapped.save_pretrained(str(out_dir / "final"))
+    processor.save_pretrained(str(out_dir / "final"))
+    full_dataset.action_tokenizer.save(str(out_dir / "final" / "action_stats.npz"))
 
-    # 訓練設定を保存
-    with open(output_dir / "training_args.json", "w") as f:
-        json.dump(vars(args), f, indent=2)
+    if tb_logger:
+        tb_logger.finish()
 
-    if wandb_logger:
-        wandb_logger.finish()
-
-    accelerator.print(f"[train] 訓練完了! → {output_dir}")
+    accelerator.print(f"\n学習完了! → {out_dir}/best/")
 
 
 # ─── メイン ──────────────────────────────────────────────────────────────
-def main() -> None:
-    parser = argparse.ArgumentParser(description="OpenVLA LoRA ファインチューニング")
-
-    # モデル設定
-    parser.add_argument("--model_name_or_path", type=str, default="openvla/openvla-7b",
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="OpenVLA 7B LoRA ファインチューニング（クラック追従タスク）"
+    )
+    parser.add_argument("--data",       type=str,   default="data/auto_raw",
+                        help="エピソードデータディレクトリ (episodes/ と patches/ を含む)")
+    parser.add_argument("--out",        type=str,   default="checkpoints/crack_openvla",
+                        help="モデル保存先")
+    parser.add_argument("--model",      type=str,   default="openvla/openvla-7b",
                         help="ベースモデル (HuggingFace Hub ID or ローカルパス)")
-    parser.add_argument("--output_dir", type=str, default="checkpoints/rust_openvla",
-                        help="チェックポイント保存先")
-
-    # データ設定
-    parser.add_argument("--data_dir", type=str, default="data/rust_rlds",
-                        help="TFRecord データディレクトリ")
-    # LoRA 設定
-    parser.add_argument("--lora_rank", type=int, default=16)
-    parser.add_argument("--lora_alpha", type=int, default=32)
-    parser.add_argument("--lora_dropout", type=float, default=0.05)
-
-    # 訓練ハイパーパラメータ
-    parser.add_argument("--num_epochs", type=int, default=5)
-    parser.add_argument("--per_device_train_batch_size", type=int, default=4)
-    parser.add_argument("--per_device_eval_batch_size", type=int, default=8)
-    parser.add_argument("--learning_rate", type=float, default=2e-4)
-    parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument("--warmup_ratio", type=float, default=0.05)
-    parser.add_argument("--max_grad_norm", type=float, default=1.0)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
-    parser.add_argument("--bf16", action="store_true", default=True,
-                        help="bfloat16 で訓練 (H100 推奨)")
-
-    # ログ・保存設定
-    parser.add_argument("--logging_steps", type=int, default=10)
-    parser.add_argument("--eval_epochs", type=int, default=1)
-    parser.add_argument("--save_epochs", type=int, default=2)
-    parser.add_argument("--wandb_project", type=str, default="rust_openvla",
-                        help="WandB プロジェクト名")
-    parser.add_argument("--run_name", type=str, default=None)
-
+    parser.add_argument("--epochs",     type=int,   default=5)
+    parser.add_argument("--lora_rank",  type=int,   default=32)
+    parser.add_argument("--batch_size", type=int,   default=16)
+    parser.add_argument("--grad_accum", type=int,   default=1,
+                        help="勾配累積ステップ数")
+    parser.add_argument("--lr",         type=float, default=5e-4)
+    parser.add_argument("--bf16",       action="store_true", default=False,
+                        help="bfloat16 で訓練（H100 推奨）")
     args = parser.parse_args()
 
-    # torch が利用可能かチェック
-    try:
-        import torch
-        if not torch.cuda.is_available():
-            print("[WARNING] CUDA が利用できません。CPU では非常に低速です。")
-    except ImportError:
+    if not TORCH_AVAILABLE:
         print("[ERROR] PyTorch が必要です。")
-        return
+        exit(1)
+    if not torch.cuda.is_available():
+        print("[WARNING] CUDA が利用できません。H100 上で実行してください。")
 
     train(args)
-
-
-if __name__ == "__main__":
-    main()
