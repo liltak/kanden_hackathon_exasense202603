@@ -227,14 +227,29 @@ def compute_sam_masks(
     # Try SAM3 first, fall back to SAM2
     try:
         from sam3 import build_sam3_image_model
-        console.print("    SAM3 available — checking checkpoint access...")
-        model = build_sam3_image_model(device=device, eval_mode=True)
+        from huggingface_hub import hf_hub_download
+
+        console.print("    SAM3 available — loading model...")
+        # Try official repo first, fall back to mirror
+        try:
+            ckpt = hf_hub_download(repo_id="facebook/sam3", filename="sam3.pt")
+        except Exception:
+            ckpt = hf_hub_download(repo_id="1038lab/sam3", filename="sam3.pt")
+            console.print("    Using mirror checkpoint (1038lab/sam3)")
+
+        # SAM3 model_builder only supports "cuda" or "cpu", not "cuda:0"
+        sam3_device = "cuda" if "cuda" in device else "cpu"
+        model = build_sam3_image_model(
+            device=sam3_device, eval_mode=True,
+            checkpoint_path=ckpt, load_from_HF=False,
+        )
         console.print("    SAM3 loaded! Using text-prompted segmentation.")
         masks = _compute_sam3_masks(model, images, device)
         del model
         torch.cuda.empty_cache()
         return masks
-    except Exception:
+    except Exception as e:
+        console.print(f"    SAM3 unavailable ({e}), falling back to SAM2...")
         pass
 
     from sam2.build_sam import build_sam2
@@ -314,14 +329,102 @@ def _compute_sam3_masks(
     model,
     images: list[Image.Image],
     device: str = "cuda:0",
+    fg_prompts: list[str] | None = None,
+    bg_prompts: list[str] | None = None,
 ) -> list[np.ndarray]:
     """Compute foreground masks using SAM3 text-prompted segmentation.
 
-    Uses "building" and "structure" as text prompts to segment
-    the main structure in each image.
+    Uses text prompts to detect foreground concepts (building, structure, etc.)
+    and background concepts (sky) to create per-image masks.
+
+    Args:
+        model: Loaded Sam3Image model.
+        images: List of PIL images.
+        device: Torch device.
+        fg_prompts: Text prompts for foreground concepts.
+        bg_prompts: Text prompts for background concepts.
+
+    Returns:
+        List of boolean masks (H, W), True = foreground.
     """
-    # SAM3 concept mask generation — will be implemented when access is granted
-    raise NotImplementedError("SAM3 checkpoint not yet accessible")
+    import torch
+    from sam3.model.sam3_image_processor import Sam3Processor
+
+    if fg_prompts is None:
+        fg_prompts = ["building", "structure", "roof", "ground", "wall", "factory"]
+    if bg_prompts is None:
+        bg_prompts = ["sky"]
+
+    processor = Sam3Processor(model, device=device)
+    result_masks = []
+
+    for i, img in enumerate(images):
+        img_np = np.array(img)
+        H, W = img_np.shape[:2]
+
+        state = processor.set_image(img)
+
+        # Collect foreground masks
+        fg_union = np.zeros((H, W), dtype=bool)
+        for prompt in fg_prompts:
+            output = processor.set_text_prompt(state=state, prompt=prompt)
+            masks = output.get("masks")
+            if masks is not None and len(masks) > 0:
+                if isinstance(masks, torch.Tensor):
+                    masks_np = masks.cpu().numpy()
+                else:
+                    masks_np = np.array(masks)
+                if masks_np.ndim == 4:
+                    masks_np = masks_np.squeeze(1)
+                if masks_np.ndim == 3:
+                    combined = masks_np.any(axis=0)
+                else:
+                    combined = masks_np > 0.5
+                if combined.shape != (H, W):
+                    from PIL import Image as PILImage
+                    m_img = PILImage.fromarray(combined.astype(np.uint8) * 255)
+                    m_img = m_img.resize((W, H), PILImage.NEAREST)
+                    combined = np.array(m_img) > 127
+                fg_union |= combined
+
+        # Collect background masks
+        bg_union = np.zeros((H, W), dtype=bool)
+        for prompt in bg_prompts:
+            output = processor.set_text_prompt(state=state, prompt=prompt)
+            masks = output.get("masks")
+            if masks is not None and len(masks) > 0:
+                if isinstance(masks, torch.Tensor):
+                    masks_np = masks.cpu().numpy()
+                else:
+                    masks_np = np.array(masks)
+                if masks_np.ndim == 4:
+                    masks_np = masks_np.squeeze(1)
+                if masks_np.ndim == 3:
+                    combined = masks_np.any(axis=0)
+                else:
+                    combined = masks_np > 0.5
+                if combined.shape != (H, W):
+                    from PIL import Image as PILImage
+                    m_img = PILImage.fromarray(combined.astype(np.uint8) * 255)
+                    m_img = m_img.resize((W, H), PILImage.NEAREST)
+                    combined = np.array(m_img) > 127
+                bg_union |= combined
+
+        # Final mask: foreground minus background
+        fg_mask = fg_union & ~bg_union
+        result_masks.append(fg_mask)
+
+        fg_pct = 100 * fg_mask.sum() / (H * W)
+        console.print(f"    [{i}] SAM3: {fg_pct:.0f}% foreground")
+
+    total_pixels = sum(m.size for m in result_masks)
+    fg_pixels = sum(m.sum() for m in result_masks)
+    console.print(
+        f"    SAM3 mask total: {fg_pixels:,}/{total_pixels:,} pixels kept "
+        f"({100*fg_pixels/total_pixels:.1f}%)"
+    )
+
+    return result_masks
 
 
 def compute_foreground_masks(
