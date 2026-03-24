@@ -13,7 +13,7 @@ hostname
 nvidia-smi
 
 # ─── 作業ディレクトリ ──────────────────────────────────────────────────────────
-cd /home/team-002/openvla-sim
+cd /home/team-002/openvla-sim2
 
 # ─── ログディレクトリ作成 ──────────────────────────────────────────────────────
 mkdir -p logs
@@ -41,21 +41,34 @@ export EGL_DEVICE_ID=0
 
 # ─── 引数設定 ─────────────────────────────────────────────────────────────────
 CKPT_DIR="${CKPT_DIR:-checkpoints_v3/drone_openvla/best}"
-INSTRUCTION="${INSTRUCTION:-ソファに近づけ}"
+TARGET="ソファ"                                # 単一オブジェクトモード: ソファ / アームチェア / 木製引き出し / "" で複数モード
+INSTRUCTION="${INSTRUCTION:-Fly toward the sofa and do a full loop around it.}"  # TARGET 未指定時に使用
 OUTPUT="${OUTPUT:-logs/infer-${SLURM_JOB_ID}.mp4}"
-MAX_STEPS="${MAX_STEPS:-300}"
+MAX_STEPS="${MAX_STEPS:-1000}"
 
 # ─── OpenVLA 推論実行 ──────────────────────────────────────────────────────────
 echo "------- OpenVLA Infer Start -------"
 echo "  CKPT_DIR   : $CKPT_DIR"
+echo "  TARGET     : ${TARGET:-（複数オブジェクトモード）}"
 echo "  INSTRUCTION: $INSTRUCTION"
 echo "  OUTPUT     : $OUTPUT"
 echo "  MAX_STEPS  : $MAX_STEPS"
-python openvla-sim/scripts/infer.py \
-  --ckpt_dir "$CKPT_DIR" \
-  --instruction "$INSTRUCTION" \
-  --output "$OUTPUT" \
-  --max_steps "$MAX_STEPS"
+
+# --target が指定された場合は単一オブジェクトモード
+if [ -n "$TARGET" ]; then
+  python openvla-sim/scripts/infer.py \
+    --ckpt_dir "$CKPT_DIR" \
+    --target "$TARGET" \
+    --instruction "$INSTRUCTION" \
+    --output "$OUTPUT" \
+    --max_steps "$MAX_STEPS"
+else
+  python openvla-sim/scripts/infer.py \
+    --ckpt_dir "$CKPT_DIR" \
+    --instruction "$INSTRUCTION" \
+    --output "$OUTPUT" \
+    --max_steps "$MAX_STEPS"
+fi
 EXIT_CODE=$?
 
 echo "------- OpenVLA Infer End (exit=$EXIT_CODE) -------"

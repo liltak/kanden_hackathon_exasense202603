@@ -26,7 +26,8 @@ RLDS フォーマット:
   python convert_to_rlds.py \\
     --input_dir dataset \\
     --output_dir dataset_rlds \\
-    --split_ratio 0.9
+    --train_ratio 0.8 --val_ratio 0.1
+  # test_ratio は自動で 1.0 - train - val になります
 
 検証のみ実行:
   python convert_to_rlds.py --test --output_dir dataset_rlds
@@ -194,8 +195,11 @@ def main() -> None:
                         help="collect.py の出力ディレクトリ")
     parser.add_argument("--output_dir",   default="dataset_rlds",
                         help="TFRecord の出力ディレクトリ")
-    parser.add_argument("--split_ratio",  type=float, default=0.9,
-                        help="train 割合 (default: 0.9)")
+    parser.add_argument("--train_ratio",  type=float, default=0.8,
+                        help="train 割合 (default: 0.8)")
+    parser.add_argument("--val_ratio",    type=float, default=0.1,
+                        help="validation 割合 (default: 0.1)")
+    # test_ratio = 1.0 - train_ratio - val_ratio
     parser.add_argument("--seed",         type=int,   default=42)
     parser.add_argument("--test",         action="store_true",
                         help="既存 TFRecord の検証のみ実行")
@@ -207,8 +211,8 @@ def main() -> None:
         if not TF_AVAILABLE:
             print("[ERROR] TensorFlow が必要です。")
             return
-        for name in ["train", "val"]:
-            p = output_dir / f"{name}.tfrecord.gz"
+        for name in ["train", "val", "test"]:
+            p = output_dir / name / "data.tfrecord.gz"
             if p.exists():
                 verify_tfrecord(p)
             else:
@@ -224,35 +228,47 @@ def main() -> None:
     input_dir = Path(args.input_dir)
     episodes = load_episodes(input_dir)
 
-    # シャッフルして train/val 分割
+    # シャッフルして train/val/test 分割 (80/10/10)
     rng = np.random.default_rng(args.seed)
     indices = rng.permutation(len(episodes)).tolist()
-    n_train = max(1, int(len(episodes) * args.split_ratio))
+    n_total = len(episodes)
+    n_train = max(1, int(n_total * args.train_ratio))
+    n_val   = max(0, int(n_total * args.val_ratio))
     train_eps = [episodes[i] for i in indices[:n_train]]
-    val_eps   = [episodes[i] for i in indices[n_train:]] if len(indices) > n_train else []
+    val_eps   = [episodes[i] for i in indices[n_train:n_train + n_val]]
+    test_eps  = [episodes[i] for i in indices[n_train + n_val:]]
 
-    print(f"[convert] train={len(train_eps)}, val={len(val_eps)}")
+    print(f"[convert] train={len(train_eps)}, val={len(val_eps)}, test={len(test_eps)}")
 
     n_train_steps = write_tfrecord(
-        train_eps, output_dir / "train.tfrecord.gz", input_dir, "train"
+        train_eps, output_dir / "train" / "data.tfrecord.gz", input_dir, "train"
     )
     n_val_steps = 0
     if val_eps:
         n_val_steps = write_tfrecord(
-            val_eps, output_dir / "val.tfrecord.gz", input_dir, "val"
+            val_eps, output_dir / "val" / "data.tfrecord.gz", input_dir, "val"
+        )
+    n_test_steps = 0
+    if test_eps:
+        n_test_steps = write_tfrecord(
+            test_eps, output_dir / "test" / "data.tfrecord.gz", input_dir, "test"
         )
 
     print("\n[検証]")
-    verify_tfrecord(output_dir / "train.tfrecord.gz")
+    verify_tfrecord(output_dir / "train" / "data.tfrecord.gz")
     if val_eps:
-        verify_tfrecord(output_dir / "val.tfrecord.gz")
+        verify_tfrecord(output_dir / "val" / "data.tfrecord.gz")
+    if test_eps:
+        verify_tfrecord(output_dir / "test" / "data.tfrecord.gz")
 
     with open(output_dir / "dataset_info.json", "w", encoding="utf-8") as f:
         json.dump({
             "n_train_episodes": len(train_eps),
             "n_val_episodes":   len(val_eps),
+            "n_test_episodes":  len(test_eps),
             "n_train_steps":    n_train_steps,
             "n_val_steps":      n_val_steps,
+            "n_test_steps":     n_test_steps,
             "image_size":       IMAGE_SIZE,
             "action_dim":       ACTION_DIM,
             "action_format":    "[vx, vy, vz, yaw_rate, 0, 0, 0]",

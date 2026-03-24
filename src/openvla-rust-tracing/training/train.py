@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     from peft import LoraConfig, get_peft_model
 
 # 命令文 (固定)
-INSTRUCTION = "クラックを追従してください"
+INSTRUCTION = "Follow the rust trace. Navigate to continue tracking the corrosion path."
 
 
 # ─── データセット ──────────────────────────────────────────────────────────
@@ -72,13 +72,22 @@ class CrackTraceDataset(Dataset):
         data_dir: str,
         processor=None,
         action_tokenizer: ActionTokenizer | None = None,
+        episode_indices: list[int] | None = None,
     ) -> None:
         self.data_dir  = Path(data_dir)
         self.processor = processor
         self.samples: list[dict] = []
 
         episode_dir = self.data_dir / "episodes"
-        for ep_path in sorted(episode_dir.glob("episode_*.json")):
+        all_ep_paths = sorted(episode_dir.glob("episode_*.json"))
+
+        # episode_indices が指定されている場合はその番号のエピソードのみ使用
+        if episode_indices is not None:
+            ep_paths = [all_ep_paths[i] for i in episode_indices if i < len(all_ep_paths)]
+        else:
+            ep_paths = all_ep_paths
+
+        for ep_path in ep_paths:
             with open(ep_path, encoding="utf-8") as f:
                 ep = json.load(f)
             for step in ep.get("steps", []):
@@ -91,8 +100,7 @@ class CrackTraceDataset(Dataset):
                     "action_2d":  action_2d,
                 })
 
-        n_ep = len(list(episode_dir.glob("episode_*.json")))
-        print(f"データセット: {len(self.samples)} ステップ ({n_ep} エピソード)")
+        print(f"データセット: {len(self.samples)} ステップ ({len(ep_paths)} エピソード)")
 
         # ActionTokenizer: 渡されなければデータセットから統計を計算
         if action_tokenizer is not None:
@@ -210,21 +218,41 @@ def train(args: argparse.Namespace) -> None:
     model.enable_input_require_grads()
     model.gradient_checkpointing_enable()
 
-    # データセット (ActionTokenizer をデータセットから自動計算)
-    full_dataset = CrackTraceDataset(args.data, processor=processor)
+    # ─── エピソード単位で train/val/test 分割 (80/10/10, seed固定) ───────────
+    from pathlib import Path as _Path
+    all_ep_paths = sorted((_Path(args.data) / "episodes").glob("episode_*.json"))
+    n_ep = len(all_ep_paths)
+    ep_indices = list(range(n_ep))
+    rng = random.Random(42)  # 固定シードで再現性を確保
+    rng.shuffle(ep_indices)
 
-    # train/val 分割 (90/10)
-    n_total = len(full_dataset)
-    n_train = max(1, int(n_total * 0.9))
-    indices = list(range(n_total))
-    random.shuffle(indices)
-    train_indices = indices[:n_train]
-    val_indices   = indices[n_train:]
+    n_train_ep = max(1, int(n_ep * 0.8))
+    n_val_ep   = max(1, int(n_ep * 0.1))
+    train_ep = ep_indices[:n_train_ep]
+    val_ep   = ep_indices[n_train_ep:n_train_ep + n_val_ep]
+    test_ep  = ep_indices[n_train_ep + n_val_ep:]
 
-    from torch.utils.data import Subset
-    train_set = Subset(full_dataset, train_indices)
-    val_set   = Subset(full_dataset, val_indices)
-    accelerator.print(f"train: {len(train_set)}, val: {len(val_set)}")
+    # 分割情報を保存
+    split_path = _Path(args.out) / "data_split.json"
+    _Path(args.out).mkdir(parents=True, exist_ok=True)
+    import json as _json
+    split_path.write_text(_json.dumps({
+        "n_episodes": n_ep,
+        "train": sorted(train_ep),
+        "val":   sorted(val_ep),
+        "test":  sorted(test_ep),
+    }, indent=2))
+    accelerator.print(f"データ分割: train={len(train_ep)}ep / val={len(val_ep)}ep / test={len(test_ep)}ep → {split_path}")
+
+    # ActionTokenizer は train エピソードのみから計算
+    train_set_for_stats = CrackTraceDataset(args.data, processor=None, episode_indices=train_ep)
+    action_tokenizer = train_set_for_stats.action_tokenizer
+
+    train_set = CrackTraceDataset(args.data, processor=processor,
+                                  action_tokenizer=action_tokenizer, episode_indices=train_ep)
+    val_set   = CrackTraceDataset(args.data, processor=processor,
+                                  action_tokenizer=action_tokenizer, episode_indices=val_ep)
+    accelerator.print(f"train: {len(train_set)} steps, val: {len(val_set)} steps, test: {len(test_ep)} episodes (推論時に使用)")
 
     def collate_fn(batch):
         from torch.nn.utils.rnn import pad_sequence
@@ -350,7 +378,7 @@ def train(args: argparse.Namespace) -> None:
             unwrapped_ep = accelerator.unwrap_model(model)
             unwrapped_ep.save_pretrained(str(epoch_ckpt))
             processor.save_pretrained(str(epoch_ckpt))
-            full_dataset.action_tokenizer.save(str(epoch_ckpt / "action_stats.npz"))
+            train_set.action_tokenizer.save(str(epoch_ckpt / "action_stats.npz"))
             accelerator.print(f"→ Epoch checkpoint saved: {epoch_ckpt}")
 
         # ベストモデル保存
@@ -359,14 +387,14 @@ def train(args: argparse.Namespace) -> None:
             unwrapped = accelerator.unwrap_model(model)
             unwrapped.save_pretrained(str(out_dir / "best"))
             processor.save_pretrained(str(out_dir / "best"))
-            full_dataset.action_tokenizer.save(str(out_dir / "best" / "action_stats.npz"))
+            train_set.action_tokenizer.save(str(out_dir / "best" / "action_stats.npz"))
             accelerator.print(f"✓ Best model saved (val_loss={val_loss:.4f})")
 
     # 最終モデル保存
     unwrapped = accelerator.unwrap_model(model)
     unwrapped.save_pretrained(str(out_dir / "final"))
     processor.save_pretrained(str(out_dir / "final"))
-    full_dataset.action_tokenizer.save(str(out_dir / "final" / "action_stats.npz"))
+    train_set.action_tokenizer.save(str(out_dir / "final" / "action_stats.npz"))
 
     if tb_logger:
         tb_logger.finish()

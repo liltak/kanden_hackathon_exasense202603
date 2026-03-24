@@ -200,18 +200,21 @@ def train(args: argparse.Namespace) -> None:
     # データセット (ActionTokenizer をデータセットから自動計算)
     train_dataset = DroneNavDataset(args.data, processor=processor)
 
-    # train/val 分割
+    # train/val/test 分割 (80/10/10)
     n_total = len(train_dataset)
-    n_train = max(1, int(n_total * 0.9))
+    n_train = max(1, int(n_total * args.train_ratio))
+    n_val   = max(0, int(n_total * args.val_ratio))
     indices = list(range(n_total))
     import random; random.shuffle(indices)
     train_indices = indices[:n_train]
-    val_indices   = indices[n_train:]
+    val_indices   = indices[n_train:n_train + n_val]
+    test_indices  = indices[n_train + n_val:]
 
     from torch.utils.data import Subset
     train_set = Subset(train_dataset, train_indices)
     val_set   = Subset(train_dataset, val_indices)
-    accelerator.print(f"train: {len(train_set)}, val: {len(val_set)}")
+    test_set  = Subset(train_dataset, test_indices)
+    accelerator.print(f"train: {len(train_set)}, val: {len(val_set)}, test: {len(test_set)}")
 
     def collate_fn(batch):
         from torch.nn.utils.rnn import pad_sequence
@@ -370,6 +373,8 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size",    type=int,   default=16)
     parser.add_argument("--grad_accum",    type=int,   default=1,                  help="勾配累積ステップ数")
     parser.add_argument("--lr",            type=float, default=5e-4)
+    parser.add_argument("--train_ratio",   type=float, default=0.8,                   help="train 割合 (default: 0.8)")
+    parser.add_argument("--val_ratio",     type=float, default=0.1,                   help="val 割合 (default: 0.1)")
     parser.add_argument("--bf16",          action="store_true", default=False,         help="bfloat16 で訓練（H100推奨）")
     args = parser.parse_args()
 

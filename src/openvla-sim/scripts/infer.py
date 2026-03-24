@@ -4,8 +4,13 @@ VLA 推論スクリプト (infer.py) ― OpenVLA 7B LoRA
 学習済み LoRA モデルを使ってドローンが自律飛行するか確認する
 
 使い方:
+  # 全オブジェクトを配置 (複数オブジェクトモード)
   python infer.py --ckpt_dir checkpoints/drone_openvla/best --instruction "ソファに近づけ"
   python infer.py --ckpt_dir checkpoints/drone_openvla/best --output output.mp4 --max_steps 300
+
+  # 対象物を1つに絞る (単一オブジェクトモード)
+  python infer.py --ckpt_dir checkpoints/drone_openvla/best --target ソファ
+  python infer.py --ckpt_dir checkpoints/drone_openvla/best --target アームチェア --output output.mp4
 """
 
 import os
@@ -27,6 +32,23 @@ OBJECTS = {
     "ソファ":       "sofa_02_4k.glb",
     "木製引き出し": "vintage_wooden_drawer_01_4k.glb",
 }
+
+# collect_v2.py と同じ英語名マッピング
+OBJECT_EN_NAMES = {
+    "アームチェア": "arm chair",
+    "ソファ":       "sofa",
+    "木製引き出し": "wooden drawer",
+}
+
+# collect_v2.py と同じテンプレート
+INSTRUCTION_TEMPLATES = [
+    "Approach the {name}, fly around it, and take photos.",
+    "Go close to the {name} and circle around it to observe.",
+    "Navigate to the {name}, then orbit it once while recording.",
+    "Fly toward the {name} and do a full loop around it.",
+]
+
+DEFAULT_INSTRUCTION = "Approach the sofa, fly around it, and take photos."
 
 IMG_SIZE = 224
 VIDEO_SIZE = 640  # 動画録画用解像度
@@ -97,6 +119,21 @@ def infer(args):
     # 動画保存モード: ヘッドレスで実行
     save_video = args.output is not None
 
+    # 単一オブジェクトモード: --target が指定された場合
+    if args.target is not None:
+        if args.target not in OBJECTS:
+            print(f"[ERROR] --target '{args.target}' は未定義です。選択肢: {list(OBJECTS.keys())}")
+            return
+        objects_to_place = {args.target: OBJECTS[args.target]}
+        # --instruction が未指定なら collect_v2.py と同じテンプレートで英語命令を生成
+        if args.instruction == DEFAULT_INSTRUCTION:
+            en_name = OBJECT_EN_NAMES[args.target]
+            args.instruction = INSTRUCTION_TEMPLATES[0].format(name=en_name)
+        print(f"[単一オブジェクトモード] 対象: {args.target} | 命令: {args.instruction}")
+    else:
+        objects_to_place = OBJECTS
+        print(f"[複数オブジェクトモード] {list(OBJECTS.keys())} を全配置")
+
     # Genesis セットアップ
     gs.init(backend=gs.cpu, logging_level="debug")
     scene = gs.Scene(
@@ -109,7 +146,7 @@ def infer(args):
     scene.add_entity(gs.morphs.Plane())
 
     # オブジェクト配置
-    for name, filename in OBJECTS.items():
+    for name, filename in objects_to_place.items():
         path = os.path.join(OBJECTS_DIR, filename)
         if not os.path.exists(path):
             continue
@@ -213,7 +250,8 @@ def infer(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt_dir",    type=str, required=True,           help="LoRA チェックポイントディレクトリ")
-    parser.add_argument("--instruction", type=str, default="ソファに近づけ", help="言語命令")
+    parser.add_argument("--target",      type=str, default=None,            help=f"単一オブジェクトモード: 対象物名 ({list(OBJECTS.keys())})")
+    parser.add_argument("--instruction", type=str, default=DEFAULT_INSTRUCTION, help="言語命令 (--target 未指定時は必須に近い)")
     parser.add_argument("--output",      type=str, default=None,            help="動画保存パス (.mp4)。指定するとヘッドレスで動画保存")
     parser.add_argument("--max_steps",   type=int, default=300,             help="動画保存モード時の最大ステップ数")
     args = parser.parse_args()

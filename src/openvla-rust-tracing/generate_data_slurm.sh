@@ -15,7 +15,7 @@ cd "$SLURM_SUBMIT_DIR"
 echo "WORKDIR=$SLURM_SUBMIT_DIR"
 
 # ─── エピソード数（変更する場合はここを編集）─────────────────────────────────
-N_EPISODES=100
+N_EPISODES=300
 
 # ─── ログ・出力ディレクトリ作成 ──────────────────────────────────────────────
 mkdir -p logs

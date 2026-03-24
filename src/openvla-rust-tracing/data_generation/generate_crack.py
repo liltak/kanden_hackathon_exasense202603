@@ -45,7 +45,7 @@ os.makedirs(ANNOT_DIR, exist_ok=True)
 
 W, H = 4096, 4096
 ACTION_DIM = 7
-INSTRUCTION = "クラックを追従してください"
+INSTRUCTION = "Follow the rust trace. Navigate to continue tracking the corrosion path."
 PATCH_SIZE = 224
 ROI_OVERLAP = 0.5   # ROIの重なり率（0.5 = 半分重なる）
 

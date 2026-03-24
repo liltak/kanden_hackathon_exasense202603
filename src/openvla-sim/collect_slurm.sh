@@ -13,7 +13,7 @@ hostname
 nvidia-smi
 
 # ─── 作業ディレクトリ ──────────────────────────────────────────────────────────
-cd /home/team-002/openvla-sim
+cd /home/team-002/openvla-sim2
 
 # ─── ログ・出力ディレクトリ作成 ───────────────────────────────────────────────
 mkdir -p logs
@@ -27,17 +27,17 @@ source .venv/bin/activate
 
 # ─── 依存パッケージのインストール ─────────────────────────────────────────────
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128 --quiet
-pip install Pillow scipy --quiet
-pip install -e third_party/Genesis --quiet
+pip install "transformers==4.44.0" peft accelerate tensorboard Pillow scipy "timm>=0.9.10,<1.0.0" --quiet
+pip install -e openvla-sim/third_party/Genesis --quiet
 
 # ─── GPU 設定 ─────────────────────────────────────────────────────────────────
 export CUDA_VISIBLE_DEVICES=0
 
 # ─── データ収集実行 ───────────────────────────────────────────────────────────
 echo "------- Collect Start -------"
-python openvla-sim/scripts/collect.py \
+python openvla-sim/scripts/collect_v2.py \
   --episodes 300 \
-  --max_steps 300 \
+  --max_steps 1000 \
   --img_size 224 \
   --hover_steps 5 \
   --out dataset_v2

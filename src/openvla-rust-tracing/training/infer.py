@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from action_tokenizer import ActionTokenizer
 
 # 命令文 (学習時と同一)
-INSTRUCTION = "クラックを追従してください"
+INSTRUCTION = "Follow the rust trace. Navigate to continue tracking the corrosion path."
 
 
 def load_model(ckpt_dir: str, device):

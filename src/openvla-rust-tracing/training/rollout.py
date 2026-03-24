@@ -28,7 +28,7 @@ from PIL import Image as PILImage
 sys.path.insert(0, os.path.dirname(__file__))
 from action_tokenizer import ActionTokenizer
 
-INSTRUCTION = "クラックを追従してください"
+INSTRUCTION = "Follow the rust trace. Navigate to continue tracking the corrosion path."
 PATCH_SIZE = 224
 
 
