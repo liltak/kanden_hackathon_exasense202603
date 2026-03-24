@@ -33,7 +33,7 @@ export default function ViewerPage() {
   const [meshUrl, setMeshUrl] = useState<string | null>(null);
   const [meshInfo, setMeshInfo] = useState<MeshInfo | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeMeshType, setActiveMeshType] = useState<"simple" | "complex">("complex");
+  const [activeMeshType, setActiveMeshType] = useState<"simple" | "complex" | "sam3_poisson">("complex");
   const [heatmapMonth, setHeatmapMonth] = useState<number | null>(null);
   const [meshRotation, setMeshRotation] = useState<MeshRotation>({ heading: 0, tiltX: 0, tiltZ: 0 });
   const fileRef = useRef<HTMLInputElement>(null);
@@ -110,7 +110,7 @@ export default function ViewerPage() {
     return () => clearInterval(interval);
   }, [reconStatus]);
 
-  const loadDemo = useCallback((type: "simple" | "complex") => {
+  const loadDemo = useCallback((type: "simple" | "complex" | "sam3_poisson") => {
     setActiveMeshType(type);
     setMeshUrl(getDemoMeshURL(type));
     setMeshInfo(null);
@@ -191,13 +191,41 @@ export default function ViewerPage() {
                   <CardTitle className="text-sm">デモメッシュ</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2">
+                  <p className="text-[11px] font-medium text-gray-500">SAM3 工場 (VGGT + SAM3前景抽出)</p>
+                  <div className="flex gap-1">
+                    <Button
+                      variant="outline"
+                      className="flex-1 border-green-400 text-[10px] text-green-700 hover:bg-green-50 font-semibold"
+                      onClick={() => {
+                        setActiveMeshType("sam3_poisson");
+                        setMeshUrl("/sam3_factory_pointcloud.glb");
+                        setMeshInfo(null);
+                        setHeatmapMonth(null);
+                      }}
+                    >
+                      点群
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="flex-1 border-green-400 text-[10px] text-green-700 hover:bg-green-50 font-semibold"
+                      onClick={() => {
+                        setActiveMeshType("sam3_poisson");
+                        setMeshUrl("/sam3_factory_mesh.glb");
+                        setMeshInfo({ mesh_id: "sam3_poisson", num_vertices: 271911, num_faces: 540921, surface_area_m2: 1.84, bounds_min: [-0.66, -0.28, 0.21], bounds_max: [0.40, 0.47, 1.54], download_url: "/sam3_factory_mesh.glb" });
+                        setHeatmapMonth(null);
+                      }}
+                    >
+                      メッシュ
+                    </Button>
+                  </div>
+                  <p className="text-[11px] font-medium text-gray-500 pt-2">プロシージャルデモ</p>
                   <Button variant="outline" className="w-full text-xs" onClick={() => loadDemo("simple")}>
                     単棟工場
                   </Button>
                   <Button variant="outline" className="w-full text-xs" onClick={() => loadDemo("complex")}>
                     工場コンプレックス（4棟）
                   </Button>
-                  <p className="text-[11px] font-medium text-gray-500 pt-1">South Building (128枚)</p>
+                  <p className="text-[11px] font-medium text-gray-500 pt-2">South Building (128枚)</p>
                   <div className="flex gap-1">
                     <Button
                       variant="outline"

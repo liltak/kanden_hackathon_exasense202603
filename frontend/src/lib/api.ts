@@ -64,11 +64,11 @@ export async function uploadMesh(file: File): Promise<MeshInfo> {
   return res.json();
 }
 
-export function getDemoMeshURL(type: "simple" | "complex"): string {
+export function getDemoMeshURL(type: "simple" | "complex" | "sam3_poisson"): string {
   return `${API_BASE}/api/mesh/demo/${type}`;
 }
 
-export function getHeatmapMeshURL(type: "simple" | "complex", taskId: string): string {
+export function getHeatmapMeshURL(type: "simple" | "complex" | "sam3_poisson", taskId: string): string {
   return `${API_BASE}/api/mesh/demo/${type}/heatmap?task_id=${taskId}`;
 }
 
@@ -122,7 +122,7 @@ export async function getShadowTimeline(
 }
 
 export function getMonthlyHeatmapURL(
-  type: "simple" | "complex",
+  type: "simple" | "complex" | "sam3_poisson",
   month: number,
 ): string {
   return `${API_BASE}/api/mesh/demo/${type}/heatmap/monthly?month=${month}`;

@@ -187,17 +187,30 @@ async def get_mesh_irradiance_glb(mesh_id: str, task_id: str | None = None, db: 
     return Response(content=glb_bytes, media_type="model/gltf-binary")
 
 
+def _load_sam3_mesh():
+    """Load SAM3 Poisson mesh from e2e results."""
+    import trimesh as _trimesh
+    from pathlib import Path
+
+    ply_path = Path(__file__).resolve().parents[3] / "data" / "e2e_results" / "south_building_compare" / "sam3_mesh_poisson.ply"
+    if not ply_path.exists():
+        raise HTTPException(status_code=404, detail="SAM3 mesh not found")
+    return _trimesh.load(str(ply_path), force="mesh")
+
+
 @router.get("/demo/{mesh_type}")
 async def get_demo_mesh(mesh_type: str):
-    """Get a demo mesh as GLB. Types: 'simple' or 'complex'."""
+    """Get a demo mesh as GLB. Types: 'simple', 'complex', or 'sam3_poisson'."""
     from ...simulation.demo_factory import create_factory_complex, create_simple_factory
 
     if mesh_type == "simple":
         mesh = create_simple_factory()
     elif mesh_type == "complex":
         mesh = create_factory_complex()
+    elif mesh_type == "sam3_poisson":
+        mesh = _load_sam3_mesh()
     else:
-        raise HTTPException(status_code=400, detail="Invalid mesh type. Use 'simple' or 'complex'")
+        raise HTTPException(status_code=400, detail="Invalid mesh type. Use 'simple', 'complex', or 'sam3_poisson'")
 
     mesh_id = f"demo_{mesh_type}"
     _mesh_cache[mesh_id] = {"mesh": mesh, "filename": f"demo_{mesh_type}.glb"}
@@ -215,6 +228,8 @@ async def get_demo_heatmap(mesh_type: str, task_id: str | None = None):
         mesh = create_simple_factory()
     elif mesh_type == "complex":
         mesh = create_factory_complex()
+    elif mesh_type == "sam3_poisson":
+        mesh = _load_sam3_mesh()
     else:
         raise HTTPException(status_code=400, detail="Invalid mesh type")
 
@@ -249,12 +264,17 @@ async def get_demo_monthly_heatmap(
         compute_solar_positions,
     )
 
-    if mesh_type not in ("simple", "complex"):
+    if mesh_type not in ("simple", "complex", "sam3_poisson"):
         raise HTTPException(status_code=400, detail="Invalid mesh type")
     if month < 1 or month > 12:
         raise HTTPException(status_code=400, detail="Month must be 1-12")
 
-    mesh = create_factory_complex() if mesh_type == "complex" else create_simple_factory()
+    if mesh_type == "sam3_poisson":
+        mesh = _load_sam3_mesh()
+    elif mesh_type == "complex":
+        mesh = create_factory_complex()
+    else:
+        mesh = create_simple_factory()
 
     solar = compute_solar_positions(latitude=lat, longitude=lng, year=2025, freq_minutes=freq)
     cs = compute_clear_sky_irradiance(latitude=lat, longitude=lng, year=2025, freq_minutes=freq)
