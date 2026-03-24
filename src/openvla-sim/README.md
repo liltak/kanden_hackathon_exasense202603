@@ -8,6 +8,10 @@ Genesis シミュレーターを使ったドローン VLA（Vision-Language-Acti
 室内環境に配置された3Dオブジェクト（ソファ・アームチェア・引き出し）を Genesis でシミュレーションし、
 FPVカメラ画像と自然言語命令（例：「ソファに近づけ」）からドローン制御アクションを出力するモデルを学習する。
 
+## デモ
+
+![推論デモ（4x速）](assets/result.gif)
+
 ```
 collect.py → train.py → infer.py
  データ収集    LoRAファインチューニング  自律飛行推論
