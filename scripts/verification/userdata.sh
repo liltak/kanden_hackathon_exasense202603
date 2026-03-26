@@ -28,7 +28,7 @@ apt-get install -y colmap || echo "COLMAP not in apt, will skip SfM test"
 
 # Clone and setup project
 cd /home/ubuntu
-git clone https://github.com/exwzd/kanden-hackathon.git exasense-project || {
+git clone https://github.com/liltak/kanden_hackathon_exasense.git exasense-project || {
     # If repo not available, create minimal project structure
     echo "Repo not accessible, creating from scratch..."
     mkdir -p exasense-project

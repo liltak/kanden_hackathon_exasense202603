@@ -18,7 +18,7 @@ provider "aws" {
 }
 
 # ============================================================
-# Existing aie-demo VPC
+# Existing VPC
 # ============================================================
 data "aws_vpc" "aie_demo" {
   filter {
@@ -34,7 +34,7 @@ data "aws_subnets" "aie_demo_private" {
   }
   filter {
     name   = "tag:Name"
-    values = ["aie-demo-private"]
+    values = ["${var.vpc_name}-private"]
   }
   filter {
     name   = "availability-zone"
@@ -43,7 +43,7 @@ data "aws_subnets" "aie_demo_private" {
 }
 
 # ============================================================
-# Existing ALB (aie-demo) and HTTPS:443 Listener
+# Existing ALB and HTTPS:443 Listener
 # ============================================================
 data "aws_lb" "aie_demo" {
   name = var.alb_name
@@ -223,7 +223,7 @@ resource "aws_lb_listener_rule" "portal" {
 
   condition {
     host_header {
-      values = ["${var.subdomain}.demo.exwzd.ai"]
+      values = ["${var.subdomain}.example.com"]
     }
   }
 

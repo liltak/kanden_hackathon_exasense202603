@@ -26,9 +26,9 @@
       "save_s": 9.85,
       "total_s": 33.39
     },
-    "point_cloud_path": "/home/team-002/kanden-hackathon/data/e2e_results/h100/vggt/point_cloud.ply",
-    "depth_dir": "/home/team-002/kanden-hackathon/data/e2e_results/h100/vggt/depth_maps",
-    "camera_poses_path": "/home/team-002/kanden-hackathon/data/e2e_results/h100/vggt/camera_poses.json"
+    "point_cloud_path": "./data/e2e_results/h100/vggt/point_cloud.ply",
+    "depth_dir": "./data/e2e_results/h100/vggt/depth_maps",
+    "camera_poses_path": "./data/e2e_results/h100/vggt/camera_poses.json"
   },
   "mesh": {
     "n_vertices": 10194,
@@ -51,7 +51,7 @@
       "segment_faces": 0.004,
       "save": 0.004
     },
-    "mesh_path": "/home/team-002/kanden-hackathon/data/e2e_results/h100/mesh/mesh.ply"
+    "mesh_path": "./data/e2e_results/h100/mesh/mesh.ply"
   },
   "solar": {
     "n_mesh_faces": 20000,

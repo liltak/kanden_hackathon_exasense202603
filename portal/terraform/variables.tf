@@ -1,7 +1,7 @@
 variable "aws_profile" {
   description = "AWS SSO profile name"
   type        = string
-  default     = "aie-demo-user"
+  default     = "default"
 }
 
 variable "aws_region" {
@@ -29,7 +29,7 @@ variable "project_name" {
 }
 
 variable "subdomain" {
-  description = "Subdomain name for {subdomain}.demo.exwzd.ai"
+  description = "Subdomain name for the portal"
   type        = string
   default     = "exasense-portal"
 }
@@ -37,13 +37,13 @@ variable "subdomain" {
 variable "alb_name" {
   description = "Name of the existing ALB"
   type        = string
-  default     = "aie-demo"
+  default     = "your-alb-name"
 }
 
 variable "vpc_name" {
   description = "Name tag of the existing VPC"
   type        = string
-  default     = "aie-demo"
+  default     = "your-vpc-name"
 }
 
 variable "alb_rule_priority" {
@@ -55,7 +55,7 @@ variable "alb_rule_priority" {
 variable "iam_instance_profile" {
   description = "Existing IAM instance profile name for Session Manager access"
   type        = string
-  default     = "takuya.kato-ec2-session-manager-role-May31"
+  default     = "your-instance-profile"
 }
 
 variable "github_token" {
@@ -68,5 +68,5 @@ variable "github_token" {
 variable "github_repo" {
   description = "GitHub repository (owner/repo)"
   type        = string
-  default     = "exwzd-aite/internal_kanden_spatialhackathon2026March"
+  default     = "your-org/your-repo"
 }

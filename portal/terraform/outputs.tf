@@ -1,6 +1,6 @@
 output "app_url" {
-  description = "URL to access the portal (via ALB + CorpVPN)"
-  value       = "https://${var.subdomain}.demo.exwzd.ai"
+  description = "URL to access the portal"
+  value       = "https://${var.subdomain}.example.com"
 }
 
 output "instance_id" {

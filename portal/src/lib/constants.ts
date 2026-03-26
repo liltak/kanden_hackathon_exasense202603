@@ -1,6 +1,6 @@
 export const GITHUB_REPO =
   process.env.GITHUB_REPO ||
-  "exwzd-aite/internal_kanden_spatialhackathon2026March";
+  "your-org/your-repo";
 
 export const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 

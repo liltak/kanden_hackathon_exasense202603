@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TF_DIR="$SCRIPT_DIR/terraform"
 LOCAL_PORT=2222
-AWS_PROFILE="aie-demo-user"
+AWS_PROFILE="${AWS_PROFILE:-default}"
 AWS_REGION="ap-northeast-1"
 
 # Get outputs from Terraform
@@ -82,7 +82,7 @@ NODE_ENV=production
 PORT=3000
 HOSTNAME=0.0.0.0
 GITHUB_TOKEN=${GITHUB_TOKEN:-}
-GITHUB_REPO=${GITHUB_REPO:-exwzd-aite/internal_kanden_spatialhackathon2026March}
+GITHUB_REPO=${GITHUB_REPO:-your-org/your-repo}
 AWS_REGION=$AWS_REGION
 ENVFILE
 EOF
@@ -98,4 +98,4 @@ EOF
 echo ""
 echo "Deploy complete!"
 echo "App URL: $APP_URL"
-echo "(Access via CorpVPN)"
+echo "(Access via VPN if applicable)"

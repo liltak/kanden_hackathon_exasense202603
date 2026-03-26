@@ -17,9 +17,9 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_DB: exasense
-      POSTGRES_USER: exasense
-      POSTGRES_PASSWORD: exasense_dev
+      POSTGRES_DB: ${POSTGRES_DB:-exasense}
+      POSTGRES_USER: ${POSTGRES_USER:-exasense}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -35,8 +35,8 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: exasense
-      MINIO_ROOT_PASSWORD: exasense_dev
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD}
     volumes:
       - minio-data:/data
     command: server /data --console-address ":9001"
@@ -58,12 +58,12 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://exasense:exasense_dev@postgres:5432/exasense
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-exasense}:${POSTGRES_PASSWORD:?err}@postgres:5432/${POSTGRES_DB:-exasense}
       - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=exasense
-      - MINIO_SECRET_KEY=exasense_dev
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?err}
       - MINIO_SECURE=false
-      - JWT_SECRET=dev-secret-change-in-production
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET}
     depends_on:
       redis:
         condition: service_healthy
@@ -83,10 +83,10 @@ services:
       dockerfile: docker/Dockerfile.worker-sim
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://exasense:exasense_dev@postgres:5432/exasense
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-exasense}:${POSTGRES_PASSWORD:?err}@postgres:5432/${POSTGRES_DB:-exasense}
       - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=exasense
-      - MINIO_SECRET_KEY=exasense_dev
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?err}
       - MINIO_SECURE=false
     depends_on:
       redis:

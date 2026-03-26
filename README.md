@@ -2,7 +2,7 @@
 
 ドローン撮影画像から工場の3Dモデルを自動生成し、太陽光パネルの最適設置位置をシミュレーション・提案するエンドツーエンドのパイプライン。
 
-**[静的デモを見る (GitHub Pages)](https://exwzd-aite.github.io/hackathon_kanden_spatial_ai/)**
+**[静的デモを見る (GitHub Pages)](https://liltak.github.io/kanden_hackathon_exasense/)**
 
 ![Architecture](generated-diagrams/exasense_architecture.png)
 
