@@ -1,22 +1,12 @@
 """
 クラック追従推論スクリプト (infer.py) ― OpenVLA 7B LoRA
 
-学習済み LoRA モデルを使って、クラック画像パッチから
-次の移動量 [delta_x, delta_y] を予測する。
+学習済み LoRA モデルを使って、クラック追従推論を実行する。
 
 使い方:
-  # 単一パッチ画像から予測
   python infer.py --ckpt_dir checkpoints/crack_openvla/best \\
-                  --image data/auto_raw/patches/episode_0000_step_00.png
-
-  # ディレクトリ内の全パッチを一括予測
-  python infer.py --ckpt_dir checkpoints/crack_openvla/best \\
-                  --image_dir data/auto_raw/patches/
-
-  # エピソード JSON と照合して精度検証
-  python infer.py --ckpt_dir checkpoints/crack_openvla/best \\
-                  --episode data/auto_raw/episodes/episode_0000.json \\
-                  --image_dir data/auto_raw/patches/
+                  --image path/to/crack_image.png \\
+                  --x 300 --y 450
 """
 
 from __future__ import annotations
@@ -37,6 +27,43 @@ from action_tokenizer import ActionTokenizer
 
 # 命令文 (学習時と同一)
 INSTRUCTION = "Follow the rust trace. Navigate to continue tracking the corrosion path."
+PATCH_SIZE = 224
+
+
+def crop_patch(img_arr: np.ndarray, x: int, y: int) -> PILImage.Image:
+    """(x, y) を中心とした 224×224 パッチを切り出す（ゼロパディング）。"""
+    h, w = img_arr.shape[:2]
+    half = PATCH_SIZE // 2
+    canvas = np.zeros((h + PATCH_SIZE, w + PATCH_SIZE, 3), dtype=np.uint8)
+    canvas[half:half + h, half:half + w] = img_arr
+    cx, cy = x + half, y + half
+    patch = canvas[cy - half:cy + half, cx - half:cx + half]
+    return PILImage.fromarray(patch)
+
+
+def save_trajectory_image(
+    img_arr: np.ndarray,
+    trajectory: list[tuple[int, int]],
+    output_path: Path,
+) -> None:
+    """軌跡を元画像上に描画して保存する。"""
+    import cv2
+    vis = cv2.cvtColor(img_arr, cv2.COLOR_RGB2BGR)
+    half = PATCH_SIZE // 2
+
+    for i, (x, y) in enumerate(trajectory):
+        color = (0, 200, 0) if i == 0 else (0, 0, 220) if i == len(trajectory) - 1 else (255, 180, 0)
+        cv2.rectangle(vis, (x - half, y - half), (x + half, y + half), color, 2)
+        cv2.circle(vis, (x, y), 5, color, -1)
+        cv2.putText(vis, str(i), (x + 6, y - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+    for i in range(len(trajectory) - 1):
+        cv2.arrowedLine(vis, trajectory[i], trajectory[i + 1],
+                        (0, 220, 255), 2, tipLength=0.15)
+
+    cv2.imwrite(str(output_path), vis)
+    print(f"[保存] 軌跡画像: {output_path}")
 
 
 def load_model(ckpt_dir: str, device):
@@ -95,8 +122,8 @@ def predict_action(
     return action  # [delta_x, delta_y]
 
 
-def infer_single(args: argparse.Namespace) -> None:
-    """単一画像から予測して結果を表示する。"""
+def infer_rollout(args: argparse.Namespace) -> None:
+    """元画像 + 起点座標でクラックを自律追跡する。"""
     import torch
 
     device = (
@@ -108,187 +135,47 @@ def infer_single(args: argparse.Namespace) -> None:
 
     model, processor, action_tokenizer = load_model(args.ckpt_dir, device)
 
-    image = PILImage.open(args.image).convert("RGB")
-    action = predict_action(model, processor, image, action_tokenizer, device)
+    img_pil = PILImage.open(args.image).convert("RGB")
+    img_arr = np.array(img_pil)
+    h, w = img_arr.shape[:2]
+    print(f"[画像] {args.image}  ({w}×{h}px)")
 
-    print(f"\n予測アクション:")
-    print(f"  delta_x = {action[0]:+.2f} px")
-    print(f"  delta_y = {action[1]:+.2f} px")
-    dist = math.sqrt(action[0]**2 + action[1]**2)
-    angle = math.degrees(math.atan2(action[1], action[0]))
-    print(f"  距離    = {dist:.2f} px")
-    print(f"  方向    = {angle:.1f}°")
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-
-def infer_episode(args: argparse.Namespace) -> None:
-    """エピソード JSON と照合して予測精度を検証する。"""
-    import torch
-
-    device = (
-        torch.device("cuda:1") if torch.cuda.device_count() > 1
-        else torch.device("cuda") if torch.cuda.is_available()
-        else torch.device("cpu")
-    )
-    print(f"[device] {device}")
-
-    model, processor, action_tokenizer = load_model(args.ckpt_dir, device)
-
-    with open(args.episode, encoding="utf-8") as f:
-        episode = json.load(f)
-
-    steps = [s for s in episode.get("steps", []) if s.get("patch_path") is not None]
-    image_dir = Path(args.image_dir)
-
-    # 出力ディレクトリ
-    out_dir = None
-    if args.output_dir:
-        out_dir = Path(args.output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-    errors = []
-    patch_imgs = []
-    preds_all = []  # 予測軌跡用
-    print(f"\nエピソード {episode['episode_id']} の検証 ({len(steps)} ステップ)")
-    print(f"{'Step':>5}  {'GT(dx,dy)':>20}  {'Pred(dx,dy)':>20}  {'Error':>8}")
-    print("-" * 60)
-
-    for i, step in enumerate(steps):
-        patch_name = Path(step["patch_path"]).name
-        patch_path = image_dir / patch_name
-        if not patch_path.exists():
-            print(f"  [{i}] スキップ: {patch_path} が見つかりません")
-            continue
-
-        image = PILImage.open(patch_path).convert("RGB")
-        pred = predict_action(model, processor, image, action_tokenizer, device)
-        gt = np.array(step["action_vector"][:2], dtype=np.float32)
-
-        err = math.sqrt((pred[0]-gt[0])**2 + (pred[1]-gt[1])**2)
-        errors.append(err)
-        preds_all.append(pred)
-        print(f"  {i:3d}  ({gt[0]:+7.1f},{gt[1]:+7.1f})  "
-              f"({pred[0]:+7.1f},{pred[1]:+7.1f})  {err:7.2f}px")
-
-        if out_dir:
-            import cv2
-            img_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-            cx, cy = 112, 112
-            scale = 3.0
-            cv2.arrowedLine(img_bgr, (cx, cy),
-                            (int(cx + gt[0] * scale), int(cy + gt[1] * scale)),
-                            (0, 200, 0), 2, tipLength=0.3)
-            cv2.arrowedLine(img_bgr, (cx, cy),
-                            (int(cx + pred[0] * scale), int(cy + pred[1] * scale)),
-                            (0, 0, 220), 2, tipLength=0.3)
-            cv2.putText(img_bgr, f"GT({gt[0]:+.0f},{gt[1]:+.0f})",
-                        (4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 0), 1)
-            cv2.putText(img_bgr, f"Pred({pred[0]:+.0f},{pred[1]:+.0f}) err={err:.1f}px",
-                        (4, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 220), 1)
-            # ステップ番号
-            cv2.putText(img_bgr, f"#{i}", (4, 220),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-            cv2.imwrite(str(out_dir / f"step_{i:03d}.png"), img_bgr)
-            patch_imgs.append(img_bgr)
-
-    if errors:
-        print(f"\n統計: 平均誤差={sum(errors)/len(errors):.2f}px | "
-              f"最大={max(errors):.2f}px | 最小={min(errors):.2f}px")
-
-    # 軌跡まとめ画像（元画像 + ROIを順番に描画）
-    if out_dir and errors:
-        import cv2
-
-        # 元画像を探す
-        src_img_name = episode.get("source_image", "")
-        src_img_path = image_dir.parent / src_img_name  # patches/ の親 = auto_raw/
-        if not src_img_path.exists():
-            # crack_generated/ も試す
-            src_img_path = Path("crack_generated") / src_img_name
-
-        if src_img_path.exists():
-            canvas = cv2.imread(str(src_img_path))
-        else:
-            # 元画像がない場合は黒背景に描画
-            canvas = np.zeros((2000, 2000, 3), dtype=np.uint8)
-
-        half = 112  # PATCH_SIZE // 2
-        valid_steps = [s for s in steps if s.get("pixel_x") is not None]
-
-        # GT軌跡（緑）
-        for i, step in enumerate(valid_steps):
-            x, y = step["pixel_x"], step["pixel_y"]
-            color = (0, 200, 0) if i == 0 else (0, 0, 220) if i == len(valid_steps)-1 else (255, 180, 0)
-            cv2.rectangle(canvas, (x - half, y - half), (x + half, y + half), color, 2)
-            cv2.circle(canvas, (x, y), 4, color, -1)
-            cv2.putText(canvas, str(i), (x - half + 4, y - half + 16),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        for i in range(len(valid_steps) - 1):
-            x0, y0 = valid_steps[i]["pixel_x"], valid_steps[i]["pixel_y"]
-            x1, y1 = valid_steps[i+1]["pixel_x"], valid_steps[i+1]["pixel_y"]
-            cv2.arrowedLine(canvas, (x0, y0), (x1, y1), (0, 220, 255), 2, tipLength=0.15)
-
-        # 予測軌跡（赤）: 起点から予測deltaを累積
-        if preds_all and valid_steps:
-            px, py = float(valid_steps[0]["pixel_x"]), float(valid_steps[0]["pixel_y"])
-            pred_positions = [(int(px), int(py))]
-            for pred in preds_all:
-                px += pred[0]
-                py += pred[1]
-                pred_positions.append((int(px), int(py)))
-
-            for i, (x, y) in enumerate(pred_positions):
-                cv2.rectangle(canvas, (x - half, y - half), (x + half, y + half), (0, 0, 200), 1)
-                cv2.circle(canvas, (x, y), 4, (0, 0, 200), -1)
-            for i in range(len(pred_positions) - 1):
-                cv2.arrowedLine(canvas, pred_positions[i], pred_positions[i+1],
-                                (80, 80, 255), 2, tipLength=0.15)
-
-        # 凡例
-        cv2.putText(canvas, "GT", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 220, 255), 2)
-        cv2.putText(canvas, "Pred", (60, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (80, 80, 255), 2)
-
-        traj_path = out_dir / "trajectory.png"
-        cv2.imwrite(str(traj_path), canvas)
-        print(f"[保存] 軌跡画像 → {traj_path}")
-        print(f"[保存] 個別パッチ {len(patch_imgs)} 枚 → {out_dir}/")
-
-
-def infer_batch(args: argparse.Namespace) -> None:
-    """ディレクトリ内の全パッチ画像を一括予測する。"""
-    import torch
-
-    device = (
-        torch.device("cuda:1") if torch.cuda.device_count() > 1
-        else torch.device("cuda") if torch.cuda.is_available()
-        else torch.device("cpu")
-    )
-    print(f"[device] {device}")
-
-    model, processor, action_tokenizer = load_model(args.ckpt_dir, device)
-
-    image_dir = Path(args.image_dir)
-    patches = sorted(image_dir.glob("*.png"))
-    print(f"\n{len(patches)} 枚のパッチ画像を予測します...\n")
-
+    x, y = args.x, args.y
+    trajectory = [(x, y)]
     results = []
-    for patch_path in patches:
-        image = PILImage.open(patch_path).convert("RGB")
-        action = predict_action(model, processor, image, action_tokenizer, device)
-        dist = math.sqrt(action[0]**2 + action[1]**2)
-        results.append({
-            "image": patch_path.name,
-            "delta_x": float(action[0]),
-            "delta_y": float(action[1]),
-            "distance": float(dist),
-        })
-        print(f"  {patch_path.name}: dx={action[0]:+.1f}px  dy={action[1]:+.1f}px  dist={dist:.1f}px")
 
-    # 結果を JSON で保存
-    out_path = Path(args.ckpt_dir) / "infer_results.json"
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
-    print(f"\n結果を保存: {out_path}")
+    print(f"\n起点: ({x}, {y})  最大{args.max_steps}ステップ")
+    print(f"{'Step':>5}  {'pos(x,y)':>16}  {'delta(dx,dy)':>20}  {'距離':>8}")
+    print("-" * 56)
 
+    for step in range(args.max_steps):
+        patch = crop_patch(img_arr, x, y)
+        action = predict_action(model, processor, patch, action_tokenizer, device)
+        dx, dy = float(action[0]), float(action[1])
+        dist = math.sqrt(dx**2 + dy**2)
+
+        print(f"  {step:3d}  ({x:6d},{y:6d})  ({dx:+8.1f},{dy:+8.1f})  {dist:7.1f}px")
+        results.append({"step": step, "x": x, "y": y, "delta_x": dx, "delta_y": dy, "distance": dist})
+
+        x = int(round(x + dx))
+        y = int(round(y + dy))
+
+        if not (0 <= x < w and 0 <= y < h):
+            print(f"  → 画像範囲外に出たため終了 ({x}, {y})")
+            break
+
+        trajectory.append((x, y))
+
+    result_path = output_dir / "trajectory.json"
+    with open(result_path, "w", encoding="utf-8") as f:
+        json.dump({"start": {"x": args.x, "y": args.y}, "steps": results}, f, indent=2)
+    print(f"\n[保存] 軌跡データ: {result_path}")
+
+    save_trajectory_image(img_arr, trajectory, output_dir / "trajectory.png")
+    print(f"\n完了: {len(trajectory)} ステップ")
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -296,14 +183,13 @@ def main() -> None:
     )
     parser.add_argument("--ckpt_dir", type=str, required=True,
                         help="LoRA チェックポイントディレクトリ (action_stats.npz を含む)")
-    parser.add_argument("--image", type=str, default=None,
-                        help="単一パッチ画像パス (224×224 PNG)")
-    parser.add_argument("--image_dir", type=str, default=None,
-                        help="パッチ画像ディレクトリ (一括処理 or エピソード検証)")
-    parser.add_argument("--episode", type=str, default=None,
-                        help="エピソード JSON パス (精度検証モード)")
-    parser.add_argument("--output_dir", type=str, default=None,
-                        help="パッチ画像の保存先（GT・予測矢印付き）")
+    parser.add_argument("--image", type=str, required=True,
+                        help="入力画像パス（元画像）")
+    parser.add_argument("--x", type=int, required=True, help="ロールアウト起点 x 座標（ピクセル）")
+    parser.add_argument("--y", type=int, required=True, help="ロールアウト起点 y 座標（ピクセル）")
+    parser.add_argument("--max_steps", type=int, default=100, help="ロールアウト最大ステップ数（デフォルト: 30）")
+    parser.add_argument("--output_dir", type=str, default="results/rollout",
+                        help="結果の出力先")
     args = parser.parse_args()
 
     try:
@@ -312,14 +198,7 @@ def main() -> None:
         print("[ERROR] PyTorch が必要です。H100 上で実行してください。")
         return
 
-    if args.episode and args.image_dir:
-        infer_episode(args)
-    elif args.image_dir:
-        infer_batch(args)
-    elif args.image:
-        infer_single(args)
-    else:
-        parser.error("--image か --image_dir を指定してください。")
+    infer_rollout(args)
 
 
 if __name__ == "__main__":
